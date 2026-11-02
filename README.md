@@ -4,6 +4,8 @@ Code companion to my M.Sc. thesis on sinkholes (dolines) on the Zugspitzplatt, B
 
 This repo holds only the code. No data is included.
 
+Claude is used to support the author in generating code.
+
 ## Structure
 
 - `src/master_thesis/` — installable package: terrain covariates, doline

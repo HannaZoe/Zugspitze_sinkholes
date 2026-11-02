@@ -28,12 +28,14 @@ import rasterio
 import rasterio.mask
 from rasterio.merge import merge
 
+from master_thesis.paths import MANUAL, RAW
+
 REQUEST_TIMEOUT_S = 20  # for small text queries (GetCapabilities, GetFeatureInfo)
 TILE_TIMEOUT_S = 90  # actual image tiles are bigger and slower to transfer
 TILE_RETRIES = 3
 WMS_BASE = "https://geoservices.bayern.de/od/wms/histdop/v1/histdop?"
-AOI_PATH = Path("data/manual/Zugspitze_AOI.geojson")
-OUT_DIR = Path("data/raw/bavaria_dop_hist")
+AOI_PATH = MANUAL / "Zugspitze_AOI.geojson"
+OUT_DIR = RAW / "bavaria_dop_hist"
 # native to this service; project default is EPSG:32632, reproject explicitly if combining
 CRS = "EPSG:25832"
 

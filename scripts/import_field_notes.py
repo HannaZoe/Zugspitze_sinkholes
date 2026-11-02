@@ -41,9 +41,11 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
+from master_thesis.paths import FIELD_DATA
+
 ZIP_SOURCE = Path(r"C:\Users\Hanna\Downloads\sinkholes_lower.zip")
-RAW_DIR = Path("fieldwork/field_data/raw")
-OUT_UNIFIED = Path("fieldwork/field_data/fieldwork_annotations.gpkg")
+RAW_DIR = FIELD_DATA / "raw"
+OUT_UNIFIED = FIELD_DATA / "fieldwork_annotations.gpkg"
 
 # ---------------------------------------------------------------------------
 # Source 1: field-notes app export ("lower" precision GPS)

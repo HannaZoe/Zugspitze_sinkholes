@@ -15,8 +15,8 @@ carried into the output; the AOI part is kept as `aoi_section`.
 
 Width, length and depth are only filled where a note states them
 unambiguously. In the merged table (fieldwork/field_data/
-fieldwork_annotations.gpkg), `type` carries no embedded "?" (certainty goes
-to `field_confidence`), `notes` is spelling-corrected but otherwise verbatim
+fieldwork_annotations.gpkg), `type` carries no embedded "?" (field certainty
+is not kept), `notes` is spelling-corrected but otherwise verbatim
 (see the NOTE_FIXES dicts), and `flag` marks anything that needs a second
 look: inferred units, vague or incomplete notes, a point marked wrong by a
 later note, and one corrupted geometry in the raw QField export.
@@ -220,18 +220,18 @@ HIGHER_PARSED = {
 
 
 LOWER_TYPE_MAP = {
-    "Sinkhole?": ("Doline", "uncertain"),
-    "Sinkhole": ("Doline", "confirmed"),
-    "Sinkhole? (very small)": ("Doline", "uncertain"),
-    "Cave Sinkhole?": ("Cave Doline", "uncertain"),
-    "Rillenkarst": ("Rillenkarst", "confirmed"),
+    "Sinkhole?": "Doline",
+    "Sinkhole": "Doline",
+    "Sinkhole? (very small)": "Doline",
+    "Cave Sinkhole?": "Cave Doline",
+    "Rillenkarst": "Rillenkarst",
 }
 # all QField points typed "Other" are caves (see HIGHER_PARSED); the
-# "(confirmed)" suffix moves to field_confidence
+# "(confirmed)" suffix is dropped
 HIGHER_TYPE_MAP = {
-    "Doline (confirmed)": ("Doline", "confirmed"),
-    "Other": ("Cave Doline", "confirmed"),
-    "Gully": ("Gully", "confirmed"),
+    "Doline (confirmed)": "Doline",
+    "Other": "Cave Doline",
+    "Gully": "Gully",
 }
 # Spelling fixes: typos and autocorrect errors only, no rewording. Two
 # ambiguous cases were resolved by the observer: "lite of frost weathering"
@@ -273,14 +273,14 @@ def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoD
     """Merge both sources into one table.
 
     `aoi_section` ("lower"/"higher") replaces the per-tool source label.
-    `type` carries no question marks; certainty is stored in
-    `field_confidence`. `notes` has typos corrected but is otherwise
+    `type` carries no question marks (field certainty is not kept).
+    `notes` has typos corrected but is otherwise
     verbatim. `flag` collects everything worth a second look, from doubts
     about the numbers to relevant context, in a single column.
     """
     lower_rows = []
     for row in lower.itertuples(index=False):
-        type_, confidence = LOWER_TYPE_MAP.get(row.title, (None, None))
+        type_ = LOWER_TYPE_MAP.get(row.title)
         note = LOWER_NOTE_FIXES.get(row.uuid, row.raw_note)
         if row.title == "Sinkhole? (very small)" and isinstance(note, str):
             note = f"[very small] {note}"
@@ -303,7 +303,6 @@ def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoD
             {
                 "aoi_section": "lower",
                 "type": type_,
-                "field_confidence": confidence,
                 "width_m": row.width1_m,
                 "length_m": row.width2_m,
                 "depth_m": row.depth_m,
@@ -318,7 +317,7 @@ def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoD
     # positional index, not row.source_fid: HIGHER_PARSED and HIGHER_NOTE_FIXES
     # are keyed 0-28, while source_fid is the shapefile's 1-based fid (1-29)
     for position, row in enumerate(higher.itertuples(index=False)):
-        type_, confidence = HIGHER_TYPE_MAP.get(row.type, (None, None))
+        type_ = HIGHER_TYPE_MAP.get(row.type)
         note = HIGHER_NOTE_FIXES.get(position, row.raw_note)
 
         flag = row.review_flag
@@ -334,7 +333,6 @@ def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoD
             {
                 "aoi_section": "higher",
                 "type": type_,
-                "field_confidence": confidence,
                 "width_m": row.width1_m,
                 "length_m": row.width2_m,
                 "depth_m": row.depth_m,

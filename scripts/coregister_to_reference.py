@@ -8,7 +8,7 @@ docs/thesis/lit_uav_coregistration.md:
 
 - ppk     (Terra PPK LiDAR/RGB):        NuthKaab
 - rtk     (Agisoft RTK, no GCPs):       NuthKaab + Deramp(1)   (RTK tilt)
-- rtk_big (20260827, metres off in z):  VerticalShift + NuthKaab + Deramp(1)
+- rtk_big (20260827, metres off in z):  VerticalShift + Deramp(1) + NuthKaab
 - datum   (DGM1, DHHN2016 vs ellipsoid): VerticalShift + NuthKaab
 
 Stable ground = valid in both, >5 m from data edges, slope < 40 deg, outside
@@ -89,7 +89,7 @@ CHAINS = {
 def pipeline(kind: str) -> xdem.coreg.Coreg:
     nk, vs = xdem.coreg.NuthKaab(), xdem.coreg.VerticalShift()
     ramp = xdem.coreg.Deramp(poly_order=1)
-    return {"ppk": nk, "rtk": nk + ramp, "rtk_big": vs + nk + ramp, "datum": vs + nk}[kind]
+    return {"ppk": nk, "rtk": nk + ramp, "rtk_big": vs + ramp + nk, "datum": vs + nk}[kind]
 
 
 def read(name: str) -> tuple[np.ndarray, dict]:

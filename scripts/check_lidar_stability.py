@@ -10,9 +10,9 @@ LiDAR epochs cover:
   EPSG:25832 + DHHN2016 heights, reprojected here)
 
 Stable ground = valid in every layer, slope below MAX_SLOPE, outside a buffer
-around every mapped doline / suspicious area / field point, and not bright
-in any epoch's RGB ortho (a cheap snow safety net; it also drops some pale
-limestone, which costs nothing but sample size).
+around every mapped doline / suspicious area / field point, not
+flagged as snow in any epoch's RGB ortho (blueness rule, see
+master_thesis.stable_ground), and >5 m from data edges.
 
 Per pair: median and NMAD of dh (bias and robust spread), a best-fit plane
 (tilt) and the Nuth & Kaab (2011) horizontal/vertical shift from xdem. Writes
@@ -30,12 +30,12 @@ import numpy as np
 import pandas as pd
 import rasterio
 import xdem
-from rasterio.features import geometry_mask
 from rasterio.merge import merge
 from rasterio.transform import from_origin
 from rasterio.warp import Resampling, reproject
 
 from master_thesis.paths import FIELD_DATA, FIGURES, INTERIM, MANUAL, RAW
+from master_thesis.stable_ground import erode_valid, feature_mask, nmad, slope_deg, snow_mask
 
 CRS = rasterio.crs.CRS.from_epsg(32632)
 RES = 0.5  # m, plenty for bias/tilt/shift; 5 cm would just be 100x slower
@@ -45,7 +45,6 @@ PAIRS = [("20241025", "20250820"), ("20250604", "20250820"), ("20241025", "20250
 MAX_SLOPE = 40  # deg
 POLY_BUFFER = 10  # m around mapped polygons
 POINT_BUFFER = 20  # m around point features (points mark centres, dolines reach ~40 m)
-SNOW_BRIGHTNESS = 200  # mean RGB (0-255) above which a pixel might be snow
 
 OUT_TABLE = FIGURES / "lidar_stability.csv"
 OUT_FIG = FIGURES / "lidar_stability.png"
@@ -99,37 +98,14 @@ def load_dgm1(transform, shape):
     return out
 
 
-def bright_mask(date, transform, shape):
-    """True where the RGB ortho is bright enough to possibly be snow."""
+def snow(date, transform, shape):
+    """Snow flags from that epoch's own RGB ortho (see stable_ground.snow_mask)."""
     with rasterio.open(RAW / date / f"{date}_terra_ppk_rgb_om.tif") as src:
         rgb = [
             warp(src, rasterio.band(src, b), transform, shape, Resampling.average)
             for b in (1, 2, 3)
         ]
-    return np.nanmean(rgb, axis=0) > SNOW_BRIGHTNESS
-
-
-def feature_mask(transform, shape):
-    """True inside the buffer around any known doline-ish feature."""
-    polys = gpd.read_file(MANUAL / "Suspicious_Areas.shp").to_crs(CRS).buffer(POLY_BUFFER)
-    points = pd.concat(
-        [
-            gpd.read_file(MANUAL / "Sinkholes.shp").to_crs(CRS).geometry,
-            gpd.read_file(FIELD_DATA / "fieldwork_annotations.gpkg").to_crs(CRS).geometry,
-        ]
-    )
-    points = points[points.notna() & ~points.is_empty].buffer(POINT_BUFFER)
-    geoms = [g for g in pd.concat([polys, points]) if g is not None and not g.is_empty]
-    return geometry_mask(geoms, out_shape=shape, transform=transform, invert=True)
-
-
-def slope_deg(dem):
-    gy, gx = np.gradient(dem, RES)
-    return np.degrees(np.arctan(np.hypot(gx, gy)))
-
-
-def nmad(x):
-    return 1.4826 * np.median(np.abs(x - np.median(x)))
+    return snow_mask(np.nan_to_num(np.stack(rgb)), RES)
 
 
 def compare(name, a, b, stable, transform):
@@ -169,12 +145,20 @@ def main() -> None:
     dsm = {d: load_dsm(RAW / d / f"{d}_terra_ppk_lidar_dsm.tif", transform, shape) for d in EPOCHS}
     dsm["dgm1"] = load_dgm1(transform, shape)
 
-    valid = np.logical_and.reduce([np.isfinite(v) for v in dsm.values()])
-    steep = slope_deg(dsm[REF]) >= MAX_SLOPE
-    features = feature_mask(transform, shape)
-    bright = np.logical_or.reduce([bright_mask(d, transform, shape) for d in EPOCHS])
-    stable = valid & ~steep & ~features & ~bright
-    for label, excl in [("steep", steep), ("near features", features), ("bright", bright)]:
+    valid = erode_valid(np.logical_and.reduce([np.isfinite(v) for v in dsm.values()]), RES)
+    steep = slope_deg(dsm[REF], RES) >= MAX_SLOPE
+    features = feature_mask(
+        polygons=[gpd.read_file(MANUAL / "Suspicious_Areas.shp").geometry],
+        points=[
+            gpd.read_file(MANUAL / "Sinkholes.shp").geometry,
+            gpd.read_file(FIELD_DATA / "fieldwork_annotations.gpkg").geometry,
+        ],
+        transform=transform, shape=shape, crs=CRS,
+        poly_buffer=POLY_BUFFER, point_buffer=POINT_BUFFER,
+    )  # fmt: skip
+    snowy = np.logical_or.reduce([snow(d, transform, shape) for d in EPOCHS])
+    stable = valid & ~steep & ~features & ~snowy
+    for label, excl in [("steep", steep), ("near features", features), ("snow", snowy)]:
         print(f"  excluded {label}: {np.mean(excl & valid):.1%} of valid area")
     print(f"  stable ground: {stable.sum() / valid.sum():.1%} of valid area")
 

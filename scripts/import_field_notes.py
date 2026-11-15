@@ -1,37 +1,25 @@
-"""Import and clean the August 2026 field-verification notes.
+"""Parse and merge the field-verification notes of 2026-08-27.
 
-Two independent sources from the same field day (2026-08-27), both copied
-raw/unmodified to fieldwork/field_data/raw/ (same raw-stays-local-and-
-gitignored policy as data/raw/, just organized under fieldwork/ since this
-is campaign data -- see fieldwork/CLAUDE.md). "lower"/"higher" in both
-sources' names refer to which part of the AOI was walked, not GPS precision
-(an earlier version of this docstring got that wrong) -- Hanna knows who
-recorded what, so `person` isn't carried into the final output, but the
-AOI section is kept as `aoi_section`.
+Two independent records from the same field day are combined; both are kept
+unmodified in fieldwork/field_data/raw/. "lower" and "higher" refer to the
+part of the AOI that was walked, not to GPS precision. The observer is not
+carried into the output; the AOI part is kept as `aoi_section`.
 
-1. A field-notes app export (`sinkholes_lower.zip`), 31 GPS pins with
-   fairly regular free-text dimension notes -- not the QField project built
-   earlier this project. Covers the lower part of the AOI.
-2. The QField project's own exported layer (`fieldwork_points_higher.shp`),
-   29 points -- so QField *was* used in the field after all, just shared as
-   a local export rather than synced via QFieldCloud. Covers the higher
-   part of the AOI. Notes here are much rougher (typed in the field, lots
-   of typos, inconsistent/implicit units) and were read and interpreted by
-   hand rather than regex-parsed, since a generic pattern risks silently
-   guessing wrong on real measurement data.
+1. Field-notes app export (`sinkholes_lower.zip`): 31 GPS points with fairly
+   regular free-text dimension notes, lower part of the AOI. Parsed with
+   regular expressions plus a few manual overrides.
+2. QField layer export (`fieldwork_points_higher.shp`): 29 points, higher
+   part of the AOI. These notes were typed in the field, with many typos and
+   implicit units, so they were interpreted manually (HIGHER_PARSED) instead
+   of with a generic pattern that could misread measurements.
 
-Both get parsed into structured width/length/depth fields where the text is
-genuinely unambiguous, then merged into one analyst-ready table,
-`fieldwork/field_data/fieldwork_annotations.gpkg` (tracked in git, same
-exception as data/manual/ -- see data/CLAUDE.md and fieldwork/CLAUDE.md):
-`type` is a clean category with no embedded "?" -- that signal moves to its
-own `field_confidence` column instead -- `notes` keeps every original
-comment, spelling-corrected (`NOTE_FIXES` below; the two genuinely ambiguous
-corrections were confirmed with Hanna directly rather than guessed), and
-`flag` surfaces anything worth a second look (inferred units, vague/
-incomplete notes, a point marked wrong by a later note, one known-bad
-geometry already present in the raw QField export) rather than silently
-guessing.
+Width, length and depth are only filled where a note states them
+unambiguously. In the merged table (fieldwork/field_data/
+fieldwork_annotations.gpkg), `type` carries no embedded "?" (certainty goes
+to `field_confidence`), `notes` is spelling-corrected but otherwise verbatim
+(see the NOTE_FIXES dicts), and `flag` marks anything that needs a second
+look: inferred units, vague or incomplete notes, a point marked wrong by a
+later note, and one corrupted geometry in the raw QField export.
 """
 
 import re
@@ -48,7 +36,7 @@ RAW_DIR = FIELD_DATA / "raw"
 OUT_UNIFIED = FIELD_DATA / "fieldwork_annotations.gpkg"
 
 # ---------------------------------------------------------------------------
-# Source 1: field-notes app export ("lower" precision GPS)
+# Source 1: field-notes app export (lower part of the AOI)
 # ---------------------------------------------------------------------------
 
 # fmt: off
@@ -63,9 +51,8 @@ MANUAL_OVERRIDES = {
 # fmt: on
 NOTE_PATTERN = re.compile(
     r"(?P<depth>\d+[.,]?\d*)\s*(?:m|cm)?\s*(?:height|high)\s*\n?\s*(?:[\w,]+\s+)*?"
-    # "and"/"x"/"times" only -- a bare comma here is the German decimal mark
-    # (e.g. "2,50m"), not a separator between two widths, confirmed by scanning
-    # every note in this dataset: none actually use a comma to join two widths.
+    # only "and"/"x"/"times" separate two widths; a bare comma is the decimal
+    # mark (e.g. "2,50m"), and no note in this dataset uses one between widths
     r"(?P<w1>\d+[.,]?\d*)\s*m?\s*(?:and|x|times)\s*(?P<w2>\d+[.,]?\d*)\s*m?\s*(?:wide|wise)",
     re.IGNORECASE,
 )
@@ -73,9 +60,8 @@ NOTE_PATTERN = re.compile(
 RANGE_PATTERN = re.compile(
     r"(?P<w1>\d+[.,]?\d*)\s*-\s*(?P<w2>\d+[.,]?\d*)\s*m\s*(?:wide|wise)", re.IGNORECASE
 )
-# fallback for only one width stated, e.g. "2,50m wide" or "2,80m wide in both ways"
-# -- width2_m stays null rather than copying width1_m, since only one measurement
-# was actually taken even if "in both ways" implies it'd be similar.
+# fallback for a single width, e.g. "2,50m wide" or "2,80m wide in both ways";
+# width2_m stays null in both cases, since only one measurement was taken
 SINGLE_WIDTH_PATTERN = re.compile(r"(?P<w1>\d+[.,]?\d*)\s*m\s*wide", re.IGNORECASE)
 DEPTH_ONLY_PATTERN = re.compile(
     r"(?P<depth>\d+[.,]?\d*)\s*(?:m|cm)?\s*(?:height|high)", re.IGNORECASE
@@ -189,15 +175,13 @@ def build_lower() -> gpd.GeoDataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Source 2: QField project export ("higher" precision GPS) -- read by hand,
-# see module docstring. Keyed by fid. depth_m/width1_m/width2_m are None
-# unless the original text states them (explicitly or via a magnitude-based
-# unit inference, e.g. a bare "435" next to an explicit "4m" is obviously
-# 435cm not 435m) -- `unit_inferred` marks the latter so it's never confused
-# with a directly-stated value, and `review_flag` carries forward anything
-# that genuinely needs Hanna's own judgment (cut-off text, ambiguous
-# numbers, a point marked wrong by a later note, timed rock-drops that are
-# not themselves a distance measurement).
+# Source 2: QField export (higher part of the AOI), interpreted manually.
+# Keyed by row position (0-28): (depth_m, width1_m, width2_m, unit_inferred,
+# review_flag). Dimensions are None unless the note states them, either
+# explicitly or through an unambiguous unit inference (a bare "435" next to
+# "4m" is read as 435 cm), which `unit_inferred` marks. `review_flag` covers
+# cut-off text, ambiguous numbers, corrections by later notes, and
+# rock-drop timings, which are not distance measurements.
 # ---------------------------------------------------------------------------
 
 # fmt: off
@@ -242,20 +226,17 @@ LOWER_TYPE_MAP = {
     "Cave Sinkhole?": ("Cave Doline", "uncertain"),
     "Rillenkarst": ("Rillenkarst", "confirmed"),
 }
-# all "Other"-typed QField points turned out to be caves on inspection (see
-# HIGHER_PARSED notes) -- "Doline (confirmed)" drops the redundant suffix,
-# the confirmation moves to its own field_confidence column instead.
+# all QField points typed "Other" are caves (see HIGHER_PARSED); the
+# "(confirmed)" suffix moves to field_confidence
 HIGHER_TYPE_MAP = {
     "Doline (confirmed)": ("Doline", "confirmed"),
     "Other": ("Cave Doline", "confirmed"),
     "Gully": ("Gully", "confirmed"),
 }
-# Spelling fixes -- plain typos only (missing/transposed letters, autocorrect
-# mangling), never a reworded paraphrase. Two were genuinely ambiguous
-# (opposite possible meanings) and were confirmed with Hanna directly rather
-# than guessed: "lite of frost weathering" -> "a lot of" (not "a little of"),
-# and "xace" -> "space". Intentional German words (schotter, Breite, sek,
-# tief, "3er") are left alone -- not errors, deliberate code-switching.
+# Spelling fixes: typos and autocorrect errors only, no rewording. Two
+# ambiguous cases were resolved by the observer: "lite of frost weathering"
+# -> "a lot of" (not "a little of") and "xace" -> "space". German words
+# (schotter, Breite, sek, tief, "3er") are intentional and left unchanged.
 LOWER_NOTE_FIXES = {
     "{43ac47e2-00ca-4927-aaaa-3b635be911b1}": "3m height \n4,20m and 5,20m wide",
 }
@@ -289,19 +270,13 @@ HIGHER_NOTE_FIXES = {
 
 
 def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Merge both sources into one clean, analyst-ready table.
+    """Merge both sources into one table.
 
-    No `person` column -- Hanna already knows who recorded what, no need to
-    carry it. `aoi_section` ("lower"/"higher") replaces the old per-tool
-    `source` label, matching what those names actually meant. No question
-    marks in `type` -- that signal moves to its own `field_confidence`
-    column instead of being baked into the category string. `notes` is
-    spelling-corrected (typos only, never reworded) but otherwise verbatim,
-    nothing summarized away. `flag` carries forward anything worth a second
-    look (inferred units, vague/incomplete notes, a point marked wrong, one
-    corrupted geometry) -- genuinely mixed in nature (sometimes about
-    whether to trust the numbers, sometimes just noteworthy context), left
-    as one column rather than forcing a false separation.
+    `aoi_section` ("lower"/"higher") replaces the per-tool source label.
+    `type` carries no question marks; certainty is stored in
+    `field_confidence`. `notes` has typos corrected but is otherwise
+    verbatim. `flag` collects everything worth a second look, from doubts
+    about the numbers to relevant context, in a single column.
     """
     lower_rows = []
     for row in lower.itertuples(index=False):
@@ -340,10 +315,8 @@ def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoD
         )
 
     higher_rows = []
-    # enumerate(), not row.source_fid -- HIGHER_NOTE_FIXES/HIGHER_PARSED are keyed
-    # by array position (0-28), while source_fid is the shapefile's own 1-indexed
-    # `fid` attribute (1-29); mixing the two up silently applied every note fix to
-    # the wrong row on the first attempt here, caught only by re-reading the output.
+    # positional index, not row.source_fid: HIGHER_PARSED and HIGHER_NOTE_FIXES
+    # are keyed 0-28, while source_fid is the shapefile's 1-based fid (1-29)
     for position, row in enumerate(higher.itertuples(index=False)):
         type_, confidence = HIGHER_TYPE_MAP.get(row.type, (None, None))
         note = HIGHER_NOTE_FIXES.get(position, row.raw_note)
@@ -352,9 +325,8 @@ def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoD
         if flag is None and row.unit_inferred:
             flag = "Unit inferred from magnitude, not stated explicitly in the note."
         if row.source_fid == 29:
-            # Already-bad geometry in the raw QField export (199257, 6974687 --
-            # nowhere near the site), confirmed with Hanna: keep the row and the
-            # coordinates as-is, just flag it rather than silently trust the map.
+            # corrupted geometry in the raw QField export (199257, 6974687, far
+            # outside the site); the row is kept unchanged and flagged
             bad_geom_note = "Geometry is corrupted in the raw export (not a usable location)."
             flag = f"{flag} {bad_geom_note}" if flag else bad_geom_note
 

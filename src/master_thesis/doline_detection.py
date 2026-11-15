@@ -112,8 +112,8 @@ def extract_depressions(
     Keeps connected regions deeper than ``min_depth_m`` and larger than
     ``min_area_m2``. Returns polygons with area, max depth, and circularity —
     cheap enough to call repeatedly while tuning thresholds against a fixed
-    depth raster from ``compute_depth_raster``. Superseded by
-    ``extract_anomalies`` for sloped terrain — see experiment_log.md.
+    depth raster from ``compute_depth_raster``. On sloped terrain,
+    ``extract_anomalies`` performs better.
     """
     return _extract_regions(
         depth_path,
@@ -132,12 +132,10 @@ def extract_anomalies(
     """Threshold a DevFromMeanElev raster into candidate doline polygons.
 
     Keeps connected regions more negative than ``threshold_m`` (locally lower
-    than their neighborhood) and larger than ``min_area_m2``. Default
-    threshold and the window size used to build ``dev_path`` should come from
-    calibration against real ground truth, not guessed — see
-    experiment_log.md for how the -0.22 m / 4 m window default was picked.
-    ``min_area_m2`` here is just a speckle filter, not a real size cutoff —
-    the anomaly footprint isn't the same thing as the doline's true extent.
+    than their neighborhood) and larger than ``min_area_m2``. The default
+    threshold (-0.22 m, with a 4 m window for ``dev_path``) comes from
+    calibration against manually mapped dolines. ``min_area_m2`` only removes
+    speckle; the anomaly footprint does not equal the true doline extent.
     """
     return _extract_regions(
         dev_path,
@@ -155,16 +153,14 @@ def extract_basins(
 ) -> gpd.GeoDataFrame:
     """Candidate dolines via h-minima-seeded watershed segmentation.
 
-    Best-performing method tested so far (see experiment_log.md), but still
-    finds far more candidates than real dolines on this terrain -- bare
-    alpine karst rock has roughly an order of magnitude more "prominent"
-    local minima than actual dolines. Treat the output as a shortlist for
-    manual review in QGIS, not a final answer.
+    The best-performing of the tested methods, but it still returns many more
+    candidates than there are dolines: bare alpine karst has roughly an order
+    of magnitude more prominent local minima than actual dolines. The output
+    is a shortlist for manual review.
 
-    Seeds come from skimage.morphology.h_minima (regional minima with depth
-    >= h relative to their surroundings, not just a static threshold), grown
-    to their full extent via watershed, masked to dev < 0 so basins stop at
-    a sensible rim instead of eating the whole raster.
+    Seeds are regional minima at least ``h`` deep relative to their
+    surroundings (skimage.morphology.h_minima), grown by watershed within
+    dev < 0 so that each basin stops at its rim.
     """
     with rasterio.open(dev_path) as src:
         dev = src.read(1, masked=True).filled(0)

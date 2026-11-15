@@ -1,8 +1,8 @@
 """Terrain derivative rasters (slope, aspect, curvature, roughness, wetness) from a DEM.
 
-Thin wrappers around WhiteboxTools, split out from doline_detection.py because
-that module is specifically about depression extraction, not general terrain
-covariates -- these feed a susceptibility/importance model instead.
+Thin wrappers around WhiteboxTools. Kept apart from doline_detection.py, which
+handles depression extraction; these rasters are covariates for the
+susceptibility model.
 """
 
 from pathlib import Path
@@ -45,13 +45,10 @@ def compute_roughness(dem_path: Path, output_path: Path) -> None:
 def compute_wetness_index(dem_path: Path, output_dir: Path, output_path: Path) -> None:
     """Topographic wetness index (TWI = ln(SCA / tan(slope))).
 
-    Needs a depression-filled DEM as an *intermediate* input for hydrologically
-    sound flow routing -- the filled DEM and the specific-catchment-area raster
-    it produces are written to ``output_dir`` as scratch files and are not the
-    real terrain; only ``output_path`` (the TWI raster) matters downstream.
-    Slope for the TWI formula is computed in radians here (not the degrees
-    raster from ``compute_slope``, which whitebox's wetness_index doesn't
-    expect).
+    Flow routing runs on a depression-filled DEM. The filled DEM, the specific
+    catchment area and a slope raster in radians (the unit wetness_index
+    expects, unlike ``compute_slope``) are written to ``output_dir`` as
+    temporary files and removed afterwards.
     """
     wbt = _wbt(dem_path)
     filled = output_dir / "_scratch_filled.tif"

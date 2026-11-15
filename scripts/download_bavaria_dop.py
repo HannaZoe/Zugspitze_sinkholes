@@ -1,15 +1,15 @@
-"""Download historical Bavaria DOP20 orthophotos (2003-present) over an AOI.
+"""Download historical Bavarian DOP20 orthophotos (2003-present) for an AOI.
 
-Uses the free, no-auth WMS "Historische DOP" service from the Bavarian
-surveying administration. For each available year, checks the actual flight
-date via GetFeatureInfo and only downloads years that fall in a configurable
-snow-free month window -- see SNOW_FREE_MONTHS below.
+Source is the open WMS "Historische DOP" of the Bavarian surveying
+administration (no authentication). For each year offered by the service,
+the actual flight date inside the AOI is read via GetFeatureInfo, and only
+dates within SNOW_FREE_MONTHS are downloaded.
 
-Important: the month filter is a heuristic, not proof. We already got burned
-once trusting a date as "probably snow-free" (the June 2025 UAV flight turned
-out to still be mostly under snow -- see docs/experiment_log.md). Every
-downloaded image also gets a rough brightness-based snow warning, but you
-still need to eyeball each result in QGIS before using it for mapping.
+The month filter is a heuristic: a summer flight date does not guarantee
+snow-free ground at this elevation (the June 2025 UAV survey was still
+largely snow-covered). Each image also receives a brightness-based snow
+score, but bright rock triggers it as well, so every image still needs a
+visual check before it is used for mapping.
 
 Usage:
     uv run python scripts/download_bavaria_dop.py
@@ -36,19 +36,17 @@ TILE_RETRIES = 3
 WMS_BASE = "https://geoservices.bayern.de/od/wms/histdop/v1/histdop?"
 AOI_PATH = MANUAL / "Zugspitze_AOI.geojson"
 OUT_DIR = RAW / "bavaria_dop_hist"
-# native to this service; project default is EPSG:32632, reproject explicitly if combining
+# native CRS of the service; the UAV data are in EPSG:32632
 CRS = "EPSG:25832"
 
-SNOW_FREE_MONTHS = {6, 7, 8, 9}  # June-September; adjust if too strict/loose
+SNOW_FREE_MONTHS = {6, 7, 8, 9}  # June-September
 MAX_DATES_PER_YEAR = 2
 TILE_SIZE_M = 1000  # well under the WMS's 6000x6000 px cap at 20cm resolution
-SNOW_WARNING_THRESHOLD = (
-    0.5  # fraction of AOI flagged bright+low-saturation; below this still usable
-)
+SNOW_WARNING_THRESHOLD = 0.5  # snow-like pixel fraction above which an image is flagged
 
 
 def available_years() -> list[int]:
-    """Ask the service what years it actually has, instead of assuming."""
+    """Return the years listed in the service's GetCapabilities document."""
     url = WMS_BASE + "SERVICE=WMS&VERSION=1.3.0&REQUEST=GetCapabilities"
     xml = urllib.request.urlopen(url, timeout=REQUEST_TIMEOUT_S).read().decode()
     years = {int(y) for y in re.findall(r"by_dop_(\d{4})_h<", xml)}
@@ -56,9 +54,10 @@ def available_years() -> list[int]:
 
 
 def capture_dates_in_aoi(year: int, aoi_bounds: tuple[float, float, float, float]) -> list[date]:
-    """Query GetFeatureInfo at a grid of points across the AOI to find which
-    actual capture date(s) this year's mosaic covers here. A single annual
-    layer can span more than one date if the AOI straddles a flight seam.
+    """Return the capture date(s) of a year's mosaic inside the AOI.
+
+    GetFeatureInfo is queried on a point grid, since an annual mosaic can
+    contain several flight dates where the AOI crosses a flight seam.
     """
     minx, miny, maxx, maxy = aoi_bounds
     xs = np.linspace(minx, maxx, 4)
@@ -156,8 +155,10 @@ def download_year(year: int, capture_date: date, aoi: gpd.GeoDataFrame, out_dir:
 
 
 def snow_proxy_fraction(tif_path: Path) -> float:
-    """Rough heuristic only: fraction of pixels that are bright and low-saturation
-    (snow-like). Bright rock/scree can also trigger this -- always check visually.
+    """Fraction of bright, low-saturation (snow-like) pixels.
+
+    Bright rock and scree produce false positives, so this is an indicator,
+    not a classification.
     """
     with rasterio.open(tif_path) as src:
         rgb = src.read([1, 2, 3]).astype(np.float32)

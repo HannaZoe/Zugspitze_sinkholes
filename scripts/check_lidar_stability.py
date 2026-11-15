@@ -35,7 +35,14 @@ from rasterio.transform import from_origin
 from rasterio.warp import Resampling, reproject
 
 from master_thesis.paths import FIELD_DATA, FIGURES, INTERIM, MANUAL, RAW
-from master_thesis.stable_ground import erode_valid, feature_mask, nmad, slope_deg, snow_mask
+from master_thesis.stable_ground import (
+    erode_valid,
+    feature_mask,
+    inliers_of,
+    nmad,
+    slope_deg,
+    snow_mask,
+)  # fmt: skip
 
 CRS = rasterio.crs.CRS.from_epsg(32632)
 RES = 0.5  # m, plenty for bias/tilt/shift; 5 cm would just be 100x slower
@@ -109,26 +116,29 @@ def snow(date, transform, shape):
 
 
 def compare(name, a, b, stable, transform):
-    """Stats of dh = a - b on stable ground, plus plane tilt and Nuth & Kaab shift."""
+    """Stats of dh = a - b on stable ground; plane tilt and Nuth & Kaab shift are
+    fitted on the 3-NMAD inliers only, so leftover snow can't drag them."""
     m = stable & np.isfinite(a) & np.isfinite(b)
-    dh = (a - b)[m]
-    rows, cols = np.nonzero(m)
+    inl = inliers_of(a - b, m)
+    dh_all, dh = (a - b)[m], (a - b)[inl]
+    rows, cols = np.nonzero(inl)
     x = (cols - cols.mean()) * RES / 1000  # km
     y = -(rows - rows.mean()) * RES / 1000
     coef, *_ = np.linalg.lstsq(np.column_stack([np.ones_like(x), x, y]), dh, rcond=None)
     resid = dh - np.column_stack([np.ones_like(x), x, y]) @ coef
 
-    nk = xdem.coreg.NuthKaab().fit(b, a, inlier_mask=m, transform=transform, crs=CRS)
+    nk = xdem.coreg.NuthKaab().fit(b, a, inlier_mask=inl, transform=transform, crs=CRS)
     shift = nk.to_matrix()[:3, 3]  # what a needs to move by to sit on b
 
     return {
         "pair": name,
         "n_px": int(m.sum()),
-        "median_m": np.median(dh),
-        "nmad_m": nmad(dh),
-        "p5_m": np.percentile(dh, 5),
-        "p95_m": np.percentile(dh, 95),
-        "frac_abs_gt_0p5m": np.mean(np.abs(dh) > 0.5),
+        "inlier_frac": inl.sum() / m.sum(),
+        "median_m": np.median(dh_all),
+        "nmad_m": nmad(dh_all),
+        "p5_m": np.percentile(dh_all, 5),
+        "p95_m": np.percentile(dh_all, 95),
+        "frac_abs_gt_0p5m": np.mean(np.abs(dh_all - np.median(dh_all)) > 0.5),
         "tilt_east_m_per_km": coef[1],
         "tilt_north_m_per_km": coef[2],
         "nmad_after_plane_m": nmad(resid),

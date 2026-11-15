@@ -14,15 +14,12 @@ move (east, north) to sit on the reference. EPSG:32632, 20 cm grid.
 """
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import rasterio
-from rasterio.windows import Window
-from skimage.registration import phase_cross_correlation
 
+from master_thesis.image_alignment import tile_shifts
 from master_thesis.paths import FIGURES, INTERIM
 
-RES = 0.2
 WINDOW = 512  # px, ~100 m
 MIN_VALID = 0.9  # fraction of valid px a tile needs in both images
 MIN_CV = 0.05  # std/mean of grey values, skips featureless tiles (snow, shadow)
@@ -35,52 +32,19 @@ OUT_TILES = FIGURES / "ortho_alignment_tiles.csv"
 OUT_FIG = FIGURES / "ortho_alignment.png"
 
 
-def grey(src: rasterio.DatasetReader, window: Window) -> np.ndarray:
-    """Mean of the first three bands, NaN where nodata."""
-    arr = src.read(indexes=[1, 2, 3] if src.count >= 3 else [1], window=window).astype("float32")
-    valid = src.read_masks(1, window=window) > 0
-    if np.dtype(src.dtypes[0]).kind != "f":
-        arr = arr / np.iinfo(src.dtypes[0]).max  # uint8 and uint16 onto 0..1
-    g = arr.mean(axis=0)
-    g[~valid | ~np.isfinite(g)] = np.nan
-    return g
-
-
-def tile_shifts(ref_src, tgt_src) -> pd.DataFrame:
-    rows = []
-    for r0 in range(0, ref_src.height - WINDOW, WINDOW):
-        for c0 in range(0, ref_src.width - WINDOW, WINDOW):
-            win = Window(c0, r0, WINDOW, WINDOW)
-            if not ref_src.read_masks(1, window=win).any():
-                continue
-            a, b = grey(ref_src, win), grey(tgt_src, win)
-            ok = np.isfinite(a) & np.isfinite(b)
-            if ok.mean() < MIN_VALID:
-                continue
-            if min(x[ok].std() / max(abs(x[ok].mean()), 1e-6) for x in (a, b)) < MIN_CV:
-                continue
-            a, b = (np.where(ok, x - np.nanmean(x), 0) for x in (a, b))
-            (sr, sc), error, _ = phase_cross_correlation(a, b, upsample_factor=10)
-            dx, dy = sc * RES, -sr * RES  # rows grow southwards
-            if np.hypot(dx, dy) > MAX_SHIFT_M:
-                continue
-            x, y = ref_src.xy(r0 + WINDOW // 2, c0 + WINDOW // 2)
-            rows.append({"x": x, "y": y, "dx_m": dx, "dy_m": dy, "error": error})
-    return pd.DataFrame(rows)
-
-
 def main() -> None:
     before, after = INTERIM / "common_grid_20cm", INTERIM / "coregistered_20cm"
     targets = [("before", p) for p in sorted(before.glob("*_om*.tif"))]
     targets += [("before", p) for p in sorted(before.glob("bavaria_dop20_*.tif"))]
     targets += [("after", p) for p in sorted(after.glob("*_om*.tif"))]
+    targets += [("after", p) for p in sorted(after.glob("bavaria_dop20_*.tif"))]
     targets = [(s, p) for s, p in targets if p.stem != REF and not any(k in p.stem for k in SKIP)]
 
     summary, tiles = [], []
     with rasterio.open(after / f"{REF}.tif") as ref_src:
         for stage, path in targets:
             with rasterio.open(path) as tgt_src:
-                t = tile_shifts(ref_src, tgt_src)
+                t = tile_shifts(ref_src, tgt_src, WINDOW, MIN_VALID, MIN_CV, MAX_SHIFT_M)
             if t.empty:
                 print(f"  {stage:6s} {path.stem}: no usable tiles")
                 continue

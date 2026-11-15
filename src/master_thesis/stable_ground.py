@@ -18,6 +18,20 @@ def nmad(x: np.ndarray) -> float:
     return float(1.4826 * np.median(np.abs(x - np.median(x))))
 
 
+def median(x: np.ndarray) -> float:
+    """Median of the finite values, NaN if there are none."""
+    x = x[np.isfinite(x)]
+    return float(np.median(x)) if x.size else np.nan
+
+
+def inliers_of(dh: np.ndarray, mask: np.ndarray, k: float = 3.0, floor: float = 0.05) -> np.ndarray:
+    """Masked px whose dh is within k NMAD (at least k * floor m) of the median.
+
+    Drops snow, real change and blunders before fitting anything to dh.
+    """
+    return mask & (np.abs(dh - median(dh[mask])) < k * max(nmad(dh[mask]), floor))
+
+
 def slope_deg(dem: np.ndarray, res: float) -> np.ndarray:
     gy, gx = np.gradient(dem, res)
     return np.degrees(np.arctan(np.hypot(gx, gy)))

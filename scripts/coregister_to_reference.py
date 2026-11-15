@@ -36,12 +36,21 @@ import numpy as np
 import pandas as pd
 import rasterio
 import xdem
-from rasterio.warp import Resampling, reproject
+from rasterio.warp import Resampling
 from rasterio.windows import Window
 from rasterio.windows import transform as window_transform
 
+from master_thesis.image_alignment import shift_raster
 from master_thesis.paths import FIELD_DATA, INTERIM, MANUAL
-from master_thesis.stable_ground import erode_valid, feature_mask, nmad, slope_deg, snow_mask
+from master_thesis.stable_ground import (
+    erode_valid,
+    feature_mask,
+    inliers_of,
+    median,
+    nmad,
+    slope_deg,
+    snow_mask,
+)  # fmt: skip
 
 CRS = rasterio.crs.CRS.from_epsg(32632)
 RES = 0.2
@@ -146,26 +155,6 @@ def horizontal_shift(coreg: xdem.coreg.Coreg) -> tuple[float, float]:
     return float(m[0, 3]), float(m[1, 3])
 
 
-def shift_product(arr: np.ndarray, profile: dict, tf, dx: float, dy: float) -> np.ndarray:
-    """Move an ortho by (dx, dy) metres and resample it back onto its (window) grid."""
-    nodata = profile["nodata"] if profile["nodata"] is not None else 0
-    out = np.full_like(arr, nodata)
-    reproject(arr, out, src_transform=rasterio.Affine(tf.a, tf.b, tf.c + dx, tf.d, tf.e, tf.f + dy),
-              src_crs=CRS, src_nodata=nodata, dst_transform=tf, dst_crs=CRS, dst_nodata=nodata,
-              resampling=Resampling.bilinear)  # fmt: skip
-    return out
-
-
-def median(x: np.ndarray) -> float:
-    x = x[np.isfinite(x)]
-    return float(np.median(x)) if x.size else np.nan
-
-
-def inliers_of(dh: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Stable px whose dh is within 3 NMAD of the median."""
-    return mask & (np.abs(dh - median(dh[mask])) < 3 * max(nmad(dh[mask]), 0.05))
-
-
 def fit(ref, tba, mask, kind, transform):
     """Drop raw-dh outliers (snow, real change), fit, then refit without the
     residual outliers of that first fit."""
@@ -254,7 +243,8 @@ def main() -> None:
             write(dsm_name, aligned[None], profile, win)
         for p in products:
             arr, p_profile = read(p, win)
-            write(p, shift_product(arr, p_profile, tf, dx, dy), p_profile, win)
+            nodata = p_profile["nodata"] if p_profile["nodata"] is not None else 0
+            write(p, shift_raster(arr, tf, CRS, nodata, dx, dy), p_profile, win)
 
     report = pd.DataFrame(rows)
     report.to_csv(OUT_DIR / "coregistration_report.csv", index=False, float_format="%.3f")

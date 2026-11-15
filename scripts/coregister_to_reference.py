@@ -14,7 +14,10 @@ docs/thesis/lit_uav_coregistration.md:
 Stable ground = valid in both, >5 m from data edges, slope < 40 deg, outside
 buffers around mapped features, not snow in the epoch's own RGB ortho. Each
 fit runs twice: the second pass drops pixels whose residual is beyond
-3 NMAD of the first, so leftover snow/changes don't drag the solution.
+3 NMAD of the first, so leftover snow/changes don't drag the solution; the
+first pass already starts from raw-dh inliers. A correction that increases
+the stable-ground NMAD is rejected in favour of a vertical shift only
+(column `applied` in the report).
 
 The 20250606 / 20250717 Agisoft flights cover the lower route (SE of the
 LiDAR footprint, little or no overlap), so they are registered to the DGM1
@@ -100,7 +103,8 @@ FOOTPRINT_PAD = 250  # px, 50 m around the data
 def pipeline(kind: str) -> xdem.coreg.Coreg:
     nk, vs = xdem.coreg.NuthKaab(), xdem.coreg.VerticalShift()
     ramp = xdem.coreg.Deramp(poly_order=1)
-    return {"ppk": nk, "rtk": nk + ramp, "rtk_big": vs + ramp + nk, "datum": vs + nk}[kind]
+    pipes = {"ppk": nk, "rtk": nk + ramp, "rtk_big": vs + ramp + nk, "datum": vs + nk}
+    return pipes.get(kind, vs)  # "vertical": fallback when the full pipeline makes it worse
 
 
 def read(name: str, window: Window | None = None, folder=IN_DIR) -> tuple[np.ndarray, dict]:
@@ -135,7 +139,10 @@ def footprint(names: list[str], shape: tuple[int, int]) -> Window:
 
 def horizontal_shift(coreg: xdem.coreg.Coreg) -> tuple[float, float]:
     steps = coreg.pipeline if isinstance(coreg, xdem.coreg.CoregPipeline) else [coreg]
-    m = next(s for s in steps if isinstance(s, xdem.coreg.NuthKaab)).to_matrix()
+    nk = next((s for s in steps if isinstance(s, xdem.coreg.NuthKaab)), None)
+    if nk is None:
+        return 0.0, 0.0
+    m = nk.to_matrix()
     return float(m[0, 3]), float(m[1, 3])
 
 
@@ -149,13 +156,23 @@ def shift_product(arr: np.ndarray, profile: dict, tf, dx: float, dy: float) -> n
     return out
 
 
+def median(x: np.ndarray) -> float:
+    x = x[np.isfinite(x)]
+    return float(np.median(x)) if x.size else np.nan
+
+
+def inliers_of(dh: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Stable px whose dh is within 3 NMAD of the median."""
+    return mask & (np.abs(dh - median(dh[mask])) < 3 * max(nmad(dh[mask]), 0.05))
+
+
 def fit(ref, tba, mask, kind, transform):
-    """Two-pass fit: second pass ignores >3 NMAD residuals of the first."""
+    """Drop raw-dh outliers (snow, real change), fit, then refit without the
+    residual outliers of that first fit."""
     kw = dict(transform=transform, crs=CRS, subsample=1_000_000, random_state=42)
-    coreg = pipeline(kind).fit(ref, tba, inlier_mask=mask, **kw)
-    dh = coreg.apply(tba, transform=transform, crs=CRS)[0] - ref
-    med, spread = np.nanmedian(dh[mask]), nmad(dh[mask])
-    inliers = mask & (np.abs(dh - med) < 3 * max(spread, 0.05))
+    inliers = inliers_of(tba - ref, mask)
+    coreg = pipeline(kind).fit(ref, tba, inlier_mask=inliers, **kw)
+    inliers = inliers_of(coreg.apply(tba, transform=transform, crs=CRS)[0] - ref, mask)
     coreg = pipeline(kind).fit(ref, tba, inlier_mask=inliers, **kw)
     return coreg, inliers
 
@@ -202,19 +219,31 @@ def main() -> None:
             print(f"  {chain}: only {mask.sum()} stable px, skipped")
             continue
 
+        before = dsm - ref
+        used = kind
         coreg, inliers = fit(ref, dsm, mask, kind, tf)
-        dx, dy = horizontal_shift(coreg)
         aligned = coreg.apply(dsm, transform=tf, crs=CRS)[0].astype("float32")
-        before, after = (dsm - ref), (aligned - ref)
+        if nmad((aligned - ref)[mask]) > nmad(before[mask]):
+            # sanity rule: a correction that increases the scatter is not accepted
+            used = "vertical"
+            coreg, inliers = fit(ref, dsm, mask, used, tf)
+            aligned = coreg.apply(dsm, transform=tf, crs=CRS)[0].astype("float32")
+        dx, dy = horizontal_shift(coreg)
+        after = aligned - ref
         rows.append({
-            "chain": chain, "reference": ref_name, "pipeline": kind, "dx_m": dx, "dy_m": dy,
+            "chain": chain, "reference": ref_name, "pipeline": kind, "applied": used,
+            "dx_m": dx, "dy_m": dy,
             "stable_px": int(mask.sum()), "inlier_frac": inliers.sum() / mask.sum(),
-            "median_before_m": np.nanmedian(before[mask]), "nmad_before_m": nmad(before[mask]),
-            "median_after_m": np.nanmedian(after[mask]), "nmad_after_m": nmad(after[mask]),
+            "median_before_m": median(before[mask]), "nmad_before_m": nmad(before[mask]),
+            "median_after_m": median(after[mask]), "nmad_after_m": nmad(after[mask]),
             "nmad_after_inliers_m": nmad(after[inliers]),
         })  # fmt: skip
-        print(f"  {chain:16s} dx {dx:+.2f} dy {dy:+.2f}  NMAD {rows[-1]['nmad_before_m']:.3f}"
-              f" -> {rows[-1]['nmad_after_m']:.3f} m", flush=True)  # fmt: skip
+        r = rows[-1]
+        print(
+            f"  {chain:16s} [{used}] dx {dx:+.2f} dy {dy:+.2f}  "
+            f"NMAD {r['nmad_before_m']:.3f} -> {r['nmad_after_m']:.3f} m",
+            flush=True,
+        )
         del before, after, ref, mask, inliers
 
         if chain == "dgm1":  # apply to the whole DGM1, not just the LiDAR window

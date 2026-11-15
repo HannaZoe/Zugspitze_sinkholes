@@ -268,6 +268,13 @@ HIGHER_NOTE_FIXES = {
     ),
 }
 
+# QField points left out of the merged table (positional index, see below)
+DROPPED_HIGHER = {
+    0: "marked wrong according to point 1",
+    18: "empty: no type, no note",
+    24: "duplicate of point 23, depth never typed in",
+}
+
 
 def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Merge both sources into one table.
@@ -317,6 +324,8 @@ def build_unified(lower: gpd.GeoDataFrame, higher: gpd.GeoDataFrame) -> gpd.GeoD
     # positional index, not row.source_fid: HIGHER_PARSED and HIGHER_NOTE_FIXES
     # are keyed 0-28, while source_fid is the shapefile's 1-based fid (1-29)
     for position, row in enumerate(higher.itertuples(index=False)):
+        if position in DROPPED_HIGHER:
+            continue
         type_ = HIGHER_TYPE_MAP.get(row.type)
         note = HIGHER_NOTE_FIXES.get(position, row.raw_note)
 

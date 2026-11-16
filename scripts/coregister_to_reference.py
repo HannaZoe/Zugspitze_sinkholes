@@ -7,6 +7,9 @@ came out of the same chain. Pipelines follow xdem's recommendations and
 docs/thesis/lit_uav_coregistration.md:
 
 - ppk     (Terra PPK LiDAR/RGB):        NuthKaab
+- ppk_along (20241025, east-end bend):  NuthKaab + along-strip bias (binned median
+                                        along the flight strip; notebook 07 holdout:
+                                        NMAD 0.050 -> 0.030 m, bend +0.18 -> +0.02 m)
 - rtk     (Agisoft RTK, no GCPs):       NuthKaab + Deramp(1)   (RTK tilt)
 - rtk_big (20260827, metres off in z):  VerticalShift + Deramp(1) + NuthKaab
 - datum   (DGM1, DHHN2016 vs ellipsoid): VerticalShift + NuthKaab
@@ -27,7 +30,13 @@ Output: data/interim/coregistered_20cm/ (same filenames; DGM1 ends up in
 ellipsoidal heights like the UAV data) plus coregistration_report.csv with
 the shifts and before/after median/NMAD on stable ground.
 The DOP20 orthophotos have no DSM and are not handled here.
+
+Rerun single chains without touching anything else (e.g. while the orthos
+are open in QGIS): `--only 20241025_lidar 20241025_rgb --dsm-only`. The report
+rows of those chains are then replaced, the others kept.
 """
+
+import argparse
 
 import geopandas as gpd
 import numpy as np
@@ -56,13 +65,16 @@ IN_DIR = INTERIM / "common_grid_20cm"
 OUT_DIR = INTERIM / "coregistered_20cm"
 REF = "20250820_terra_ppk_lidar_dsm"
 MAX_SLOPE = 40
+STRIP_ANGLE = -10  # deg, direction of the 20241025 flight strip (from east, ccw)
 
 # chain: (dsm, products sharing its georeferencing, pipeline, ortho for the snow mask)
 CHAINS = {
     "dgm1": ("bavaria_dgm1", [], "datum", None),
-    "20241025_lidar": ("20241025_terra_ppk_lidar_dsm", [], "ppk", "20241025_terra_ppk_rgb_om"),
+    "20241025_lidar": (
+        "20241025_terra_ppk_lidar_dsm", [], "ppk_along", "20241025_terra_ppk_rgb_om",
+    ),
     "20241025_rgb": (
-        "20241025_terra_ppk_rgb_dsm", ["20241025_terra_ppk_rgb_om"], "ppk",
+        "20241025_terra_ppk_rgb_dsm", ["20241025_terra_ppk_rgb_om"], "ppk_along",
         "20241025_terra_ppk_rgb_om",
     ),
     "20241025_ms": (
@@ -100,7 +112,11 @@ FOOTPRINT_PAD = 250  # px, 50 m around the data
 def pipeline(kind: str) -> xdem.coreg.Coreg:
     nk, vs = xdem.coreg.NuthKaab(), xdem.coreg.VerticalShift()
     ramp = xdem.coreg.Deramp(poly_order=1)
-    pipes = {"ppk": nk, "rtk": nk + ramp, "rtk_big": vs + ramp + nk, "datum": vs + nk}
+    along = xdem.coreg.DirectionalBias(angle=STRIP_ANGLE, fit_or_bin="bin", bin_sizes=30)
+    pipes = {
+        "ppk": nk, "ppk_along": nk + along, "rtk": nk + ramp, "rtk_big": vs + ramp + nk,
+        "datum": vs + nk,
+    }  # fmt: skip
     return pipes.get(kind, vs)  # "vertical": fallback when the full pipeline makes it worse
 
 
@@ -167,17 +183,18 @@ def stable_base(ref: np.ndarray, transform, shape) -> np.ndarray:
     return base & (slope_deg(ref, RES) < MAX_SLOPE)
 
 
-def main() -> None:
+def main(only: list[str] | None = None, dsm_only: bool = False) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     with rasterio.open(IN_DIR / f"{REF}.tif") as src:
         grid_profile, grid_shape = src.profile, src.shape
-    ref_full = read(REF)[0][0]
-    write(REF, ref_full[None], grid_profile)
+    if not only:
+        write(REF, read(REF)[0], grid_profile)
     lidar_window = footprint([REF], grid_shape)
-    del ref_full
 
     rows = []
     for chain, (dsm_name, products, kind, snow_from) in CHAINS.items():
+        if only and chain not in only:
+            continue
         # the DGM1 is fitted where the LiDAR is but corrected everywhere
         win = lidar_window if chain == "dgm1" else footprint([dsm_name, *products], grid_shape)
         ref, ref_name = read(REF, win)[0][0], REF
@@ -226,16 +243,26 @@ def main() -> None:
             write(dsm_name, aligned.astype("float32")[None], profile)
         else:
             write(dsm_name, aligned[None], profile, win)
-        for p in products:
+        for p in [] if dsm_only else products:
             arr, p_profile = read(p, win)
             nodata = p_profile["nodata"] if p_profile["nodata"] is not None else 0
             write(p, shift_raster(arr, tf, CRS, nodata, dx, dy), p_profile, win)
 
     report = pd.DataFrame(rows)
+    report_path = OUT_DIR / "coregistration_report.csv"
+    if only and report_path.exists():
+        old = pd.read_csv(report_path)
+        report = pd.concat([old[~old.chain.isin(report.chain)], report], ignore_index=True)
+        report = report.set_index("chain").loc[[c for c in CHAINS if c in set(report.chain)]]
+        report = report.reset_index()
     report.to_csv(OUT_DIR / "coregistration_report.csv", index=False, float_format="%.3f")
     with pd.option_context("display.width", 200, "display.max_columns", None):
         print(report.round(3).to_string(index=False))
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--only", nargs="+", choices=list(CHAINS), help="chains to rerun")
+    parser.add_argument("--dsm-only", action="store_true", help="don't rewrite the orthos")
+    args = parser.parse_args()
+    main(args.only, args.dsm_only)

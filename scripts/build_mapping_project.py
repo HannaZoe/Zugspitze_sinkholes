@@ -20,7 +20,9 @@ from pathlib import Path
 from qgis.core import (
     QgsApplication,
     QgsCoordinateReferenceSystem,
+    QgsEditorWidgetSetup,
     QgsFillSymbol,
+    QgsMarkerSymbol,
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
@@ -30,6 +32,13 @@ ROOT = Path(os.environ.get("THESIS_ROOT", Path(__file__).resolve().parents[2] / 
 CO = ROOT / "data" / "interim" / "coregistered_20cm"
 OUT = ROOT / "qgis" / "projects" / "kartierung.qgz"
 FOOTPRINTS = ROOT / "data" / "processed" / "uav_footprints.gpkg"
+PHOTOS = ROOT / "fieldwork" / "field_data" / "field_photos.gpkg"
+PHOTO_LAYER = "Feldfotos (Maus drauf = Foto)"
+# hover tip: the photo itself; paths in the layer are relative to the project folder
+PHOTO_TIP = (
+    '<img src="file:///[% @project_folder || \'/\' || "photo" %]" width="420"/>'
+    '<br/>[% "label" %] ([% "source" %])'
+)
 # polygon layers drawn as outline only: layer name -> outline colour
 OUTLINES = {
     "Umriss groesste Befliegung (Aug 2026 3M)": "0,0,0",
@@ -44,6 +53,7 @@ GROUPS = [
          f"{ROOT / 'data/manual/sinkhole_polygons.gpkg'}|layername=sinkholes", True),
         ("Feldpunkte Aug 2026",
          str(ROOT / "fieldwork/field_data/fieldwork_annotations.gpkg"), True),
+        (PHOTO_LAYER, f"{PHOTOS}|layername=field_photos", True),
         ("Dolinenpunkte (Sinkholes.shp)", str(ROOT / "data/manual/Sinkholes.shp"), True),
         ("Verdachtsflaechen", str(ROOT / "data/manual/Suspicious_Areas.shp"), False),
         ("Umriss groesste Befliegung (Aug 2026 3M)", f"{FOOTPRINTS}|layername=largest", True),
@@ -78,6 +88,18 @@ GROUPS = [
 ]  # fmt: skip
 
 
+def setup_photos(layer: QgsVectorLayer) -> None:
+    """Show the linked image on hover (map tip) and in the identify/attribute form."""
+    layer.renderer().setSymbol(QgsMarkerSymbol.createSimple({
+        "name": "square", "color": "255,160,0", "outline_color": "0,0,0", "size": "2.6",
+    }))  # fmt: skip
+    layer.setEditorWidgetSetup(layer.fields().indexOf("photo"), QgsEditorWidgetSetup(
+        "ExternalResource", {"DocumentViewer": 1, "RelativeStorage": 1, "FileWidget": True},
+    ))  # fmt: skip
+    layer.setMapTipTemplate(PHOTO_TIP)
+    layer.setMapTipsEnabled(True)
+
+
 def main() -> None:
     project = QgsProject.instance()
     if OUT.exists():
@@ -101,6 +123,8 @@ def main() -> None:
                 layer.renderer().setSymbol(QgsFillSymbol.createSimple({
                     "color": "0,0,0,0", "outline_color": OUTLINES[name], "outline_width": "0.6",
                 }))  # fmt: skip
+            if name == PHOTO_LAYER:
+                setup_photos(layer)
             project.addMapLayer(layer, False)
             group.addLayer(layer).setItemVisibilityChecked(visible)
             print(f"  added {name}")

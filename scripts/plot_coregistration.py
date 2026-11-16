@@ -3,6 +3,8 @@
 One row per DSM, left = raw (common 20 cm grid), right = co-registered, both
 minus the 20250820 LiDAR DSM, median removed for display (DGM1 is ~50 m off
 before). Each row is cropped to the DSM's own data and plotted at 1 m.
+A second, compact figure shows only the core datasets after co-registration,
+on one shared extent (for reports).
 """
 
 import matplotlib.pyplot as plt
@@ -17,6 +19,16 @@ REF = "20250820_terra_ppk_lidar_dsm"
 FACTOR = 5  # 20 cm -> 1 m for display
 LIMIT = 1.0  # colour range, m
 OUT = FIGURES / "coregistration_before_after.png"
+OUT_SUMMARY = FIGURES / "coregistration_summary.png"
+SUMMARY = {  # short label: DSM
+    "DGM1 (Bavarian LiDAR DTM)": "bavaria_dgm1",
+    "Oct 2024 LiDAR": "20241025_terra_ppk_lidar_dsm",
+    "Jun 2025 LiDAR": "20250604_terra_ppk_lidar_dsm",
+    "Aug 2025 RGB (photogrammetry)": "20250820_terra_ppk_rgb_dsm",
+    "Aug 2026 Mavic 3M": "20260827_terra_rtk_dsm_20cm_local_coregistration",
+    "Aug 2026 Mavic 3T": "20260827_terra_rtk_thermal_dsm_20cm_local_coregistration",
+}
+SUMMARY_LIMIT = 0.5  # m
 
 
 def load(path):
@@ -49,6 +61,22 @@ def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(OUT, dpi=110, bbox_inches="tight")
     print(f"wrote {OUT}")
+    summary(ref)
+
+
+def summary(ref: np.ndarray) -> None:
+    r, c = np.nonzero(np.isfinite(ref))
+    crop = np.s_[r.min() : r.max() + 1, c.min() : c.max() + 1]
+    fig, axes = plt.subplots(len(SUMMARY) // 2, 2, figsize=(12, 1.6 * len(SUMMARY)))
+    for ax, (label, name) in zip(axes.flat, SUMMARY.items(), strict=True):
+        dh = (load(AFTER / f"{name}.tif") - ref)[crop]
+        im = ax.imshow(dh, cmap="RdBu_r", vmin=-SUMMARY_LIMIT,
+                       vmax=SUMMARY_LIMIT)  # fmt: skip
+        ax.set_title(label, fontsize=10)
+        ax.set_axis_off()
+    fig.colorbar(im, ax=axes, shrink=0.5, label="height difference to Aug 2025 LiDAR [m]")
+    fig.savefig(OUT_SUMMARY, dpi=150, bbox_inches="tight")
+    print(f"wrote {OUT_SUMMARY}")
 
 
 if __name__ == "__main__":

@@ -130,6 +130,9 @@ def read(name: str, window: Window | None = None, folder=IN_DIR) -> tuple[np.nda
 
 def write(name: str, arr: np.ndarray, profile: dict, window: Window | None = None) -> None:
     """Write (a window of) a full-grid raster; the rest stays nodata."""
+    nodata = profile.get("nodata")
+    if arr.dtype.kind == "f" and nodata is not None and not np.isnan(nodata):
+        arr = np.where(np.isnan(arr), nodata, arr)  # NaN would otherwise count as valid data
     with rasterio.open(OUT_DIR / f"{name}.tif", "w", **profile) as dst:
         dst.write(arr, window=window)
         dst.build_overviews([2, 4, 8, 16], Resampling.average)

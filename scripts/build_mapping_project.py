@@ -8,8 +8,10 @@ Paths follow master_thesis.paths (sibling Master_Thesis repo, or THESIS_ROOT),
 but without importing the package, which isn't installed in QGIS's Python.
 Everything is EPSG:32632 on the common 20 cm grid, i.e. already aligned to the
 20250820 reference, so layers can be toggled against each other directly.
-Writes Master_Thesis/qgis/projects/kartierung.qgz (relative paths) and
-overwrites it if it exists; the older Zugspitze.qgz is left alone.
+Writes Master_Thesis/qgis/projects/kartierung.qgz (relative paths). If the
+project already exists it is only extended: layers whose name is not in it yet
+are added, everything else (styles, extent, own layers) stays as saved.
+The older Zugspitze.qgz is left alone.
 """
 
 import os
@@ -18,6 +20,7 @@ from pathlib import Path
 from qgis.core import (
     QgsApplication,
     QgsCoordinateReferenceSystem,
+    QgsFillSymbol,
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
@@ -26,6 +29,13 @@ from qgis.core import (
 ROOT = Path(os.environ.get("THESIS_ROOT", Path(__file__).resolve().parents[2] / "Master_Thesis"))
 CO = ROOT / "data" / "interim" / "coregistered_20cm"
 OUT = ROOT / "qgis" / "projects" / "kartierung.qgz"
+FOOTPRINTS = ROOT / "data" / "processed" / "uav_footprints.gpkg"
+# polygon layers drawn as outline only: layer name -> outline colour
+OUTLINES = {
+    "Umriss groesste Befliegung (Aug 2026 3M)": "0,0,0",
+    "Umrisse aller Fluege": "120,120,120",
+    "Dolinen-Polygone (zu digitalisieren)": "230,30,30",
+}
 
 # (group, [(layer name, path, visible)]), top of the legend first
 GROUPS = [
@@ -36,6 +46,8 @@ GROUPS = [
          str(ROOT / "fieldwork/field_data/fieldwork_annotations.gpkg"), True),
         ("Dolinenpunkte (Sinkholes.shp)", str(ROOT / "data/manual/Sinkholes.shp"), True),
         ("Verdachtsflaechen", str(ROOT / "data/manual/Suspicious_Areas.shp"), False),
+        ("Umriss groesste Befliegung (Aug 2026 3M)", f"{FOOTPRINTS}|layername=largest", True),
+        ("Umrisse aller Fluege", f"{FOOTPRINTS}|layername=footprints", False),
     ]),
     ("Schummerung (LiDAR)", [
         ("Aug 2025 LiDAR", CO / "hillshade/20250820_terra_ppk_lidar_dsm_hillshade.tif", True),
@@ -68,20 +80,30 @@ GROUPS = [
 
 def main() -> None:
     project = QgsProject.instance()
-    project.setCrs(QgsCoordinateReferenceSystem("EPSG:32632"))
+    if OUT.exists():
+        project.read(str(OUT))
+    else:
+        project.setCrs(QgsCoordinateReferenceSystem("EPSG:32632"))
+    existing = {layer.name() for layer in project.mapLayers().values()}
     root = project.layerTreeRoot()
     for group_name, layers in GROUPS:
-        group = root.addGroup(group_name)
+        group = root.findGroup(group_name) or root.addGroup(group_name)
         for name, path, visible in layers:
+            if name in existing:
+                continue
             path = str(path)
             vector = path.endswith((".gpkg", ".shp")) or "|layername=" in path
             layer = QgsVectorLayer(path, name, "ogr") if vector else QgsRasterLayer(path, name)
             if not layer.isValid():
                 print(f"  skipped (not found / invalid): {name} -> {path}")
                 continue
+            if name in OUTLINES:
+                layer.renderer().setSymbol(QgsFillSymbol.createSimple({
+                    "color": "0,0,0,0", "outline_color": OUTLINES[name], "outline_width": "0.6",
+                }))  # fmt: skip
             project.addMapLayer(layer, False)
-            node = group.addLayer(layer)
-            node.setItemVisibilityChecked(visible)
+            group.addLayer(layer).setItemVisibilityChecked(visible)
+            print(f"  added {name}")
         if group_name not in ("Kartierung", "Schummerung (LiDAR)"):
             group.setExpanded(False)
     OUT.parent.mkdir(parents=True, exist_ok=True)

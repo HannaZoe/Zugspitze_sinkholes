@@ -19,11 +19,9 @@ first pass already starts from raw-dh inliers. A correction that increases
 the stable-ground NMAD is rejected in favour of a vertical shift only
 (column `applied` in the report).
 
-The 20250606 / 20250717 Agisoft flights cover the lower route (SE of the
-LiDAR footprint, little or no overlap), so they are registered to the DGM1
-instead -- which is itself registered to the LiDAR reference first (one
-extra link, ~5 cm DGM1-LiDAR agreement). Every chain is processed inside its
-own data footprint to keep memory sane; outputs stay on the full grid.
+The DGM1 is fitted over the LiDAR footprint and the correction applied to
+the whole mosaic. Every chain is processed inside its own data footprint to
+keep memory sane; outputs stay on the full grid.
 
 Output: data/interim/coregistered_20cm/ (same filenames; DGM1 ends up in
 ellipsoidal heights like the UAV data) plus coregistration_report.csv with
@@ -60,7 +58,6 @@ REF = "20250820_terra_ppk_lidar_dsm"
 MAX_SLOPE = 40
 
 # chain: (dsm, products sharing its georeferencing, pipeline, ortho for the snow mask)
-# order matters: dgm1 goes first, the lower-route flights are registered to it
 CHAINS = {
     "dgm1": ("bavaria_dgm1", [], "datum", None),
     "20241025_lidar": ("20241025_terra_ppk_lidar_dsm", [], "ppk", "20241025_terra_ppk_rgb_om"),
@@ -81,14 +78,6 @@ CHAINS = {
         "20250604_agisoft_rtk_ms_dsm", ["20250604_agisoft_rtk_ms_om"], "rtk",
         "20250604_terra_ppk_rgb_om",
     ),
-    "20250606_rgb": (
-        "20250606_agisoft_rtk_rgb_dsm", ["20250606_agisoft_rtk_rgb_om"], "rtk",
-        "20250606_agisoft_rtk_rgb_om",
-    ),
-    "20250717_rgb": (
-        "20250717_agisoft_rtk_rgb_dsm", ["20250717_agisoft_rtk_rgb_om"], "rtk",
-        "20250717_agisoft_rtk_rgb_om",
-    ),
     "20250820_rgb": (
         "20250820_terra_ppk_rgb_dsm", ["20250820_terra_ppk_rgb_om"], "ppk", None,
     ),
@@ -105,7 +94,6 @@ CHAINS = {
         "rtk_big", None,
     ),
 }  # fmt: skip
-VIA_DGM1 = {"20250606_rgb", "20250717_rgb"}
 FOOTPRINT_PAD = 250  # px, 50 m around the data
 
 
@@ -192,10 +180,7 @@ def main() -> None:
     for chain, (dsm_name, products, kind, snow_from) in CHAINS.items():
         # the DGM1 is fitted where the LiDAR is but corrected everywhere
         win = lidar_window if chain == "dgm1" else footprint([dsm_name, *products], grid_shape)
-        if chain in VIA_DGM1:
-            ref, ref_name = read("bavaria_dgm1", win, folder=OUT_DIR)[0][0], "dgm1 (registered)"
-        else:
-            ref, ref_name = read(REF, win)[0][0], REF
+        ref, ref_name = read(REF, win)[0][0], REF
         tf = window_transform(win, grid_profile["transform"])
         dsm, profile = read(dsm_name, win)
         dsm = dsm[0]

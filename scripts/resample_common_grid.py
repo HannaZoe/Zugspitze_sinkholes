@@ -31,7 +31,9 @@ from master_thesis.paths import INTERIM, RAW
 CRS = rasterio.crs.CRS.from_epsg(32632)
 RES = 0.2  # m, coarsest of the imagery (20260827 epoch, DOP20)
 OUT_DIR = INTERIM / "common_grid_20cm"
-UAV_DATES = ["20241025", "20250604", "20250606", "20250717", "20250820", "20260827"]
+# 20250606 / 20250717 only cover the lower route and are left out: the thesis
+# focuses on the main study area
+UAV_DATES = ["20241025", "20250604", "20250820", "20260827"]
 
 
 def common_grid():

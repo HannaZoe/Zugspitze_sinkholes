@@ -24,6 +24,7 @@ WINDOW = 512  # px, ~100 m
 MIN_VALID = 0.9  # fraction of valid px a tile needs in both images
 MIN_CV = 0.05  # std/mean of grey values, skips featureless tiles (snow, shadow)
 MAX_SHIFT_M = 10.0  # anything bigger is a mismatch, not a shift
+LIM_M = 3.0  # axis range of the plot
 REF = "20250820_terra_ppk_rgb_om"
 # thermal IR does not correlate with RGB; its 3T RGB sibling stands in for it
 SKIP = ("thermal_ir_om",)
@@ -67,16 +68,26 @@ def main() -> None:
     tiles = pd.concat(tiles, ignore_index=True)
     tiles.to_csv(OUT_TILES, index=False, float_format="%.3f")
 
-    # one quiver panel per image (after if available, else before), arrows x10
-    latest = tiles[tiles.stage == tiles.groupby("image").stage.transform("min")]  # after < before
-    images = sorted(latest.image.unique())
-    fig, axes = plt.subplots(len(images), 1, figsize=(12, 2.4 * len(images)), squeeze=False)
-    for ax, name in zip(axes[:, 0], images, strict=True):
-        t = latest[latest.image == name]
-        ax.quiver(t.x, t.y, t.dx_m, t.dy_m, angles="xy", scale_units="xy", scale=0.1, width=0.002)
-        ax.set_title(f"{name} ({t.stage.iloc[0]}), residual shift x10", fontsize=9)
-        ax.set_aspect("equal")
+    # one panel per image: every tile's residual shift as a dot, before (grey)
+    # and after (blue). A tight blue cloud at 0 = aligned; a wide one = warped.
+    images = sorted(tiles.image.unique())
+    ncol = 4
+    nrow = -(-len(images) // ncol)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3 * ncol, 3 * nrow), squeeze=False)
+    for ax, name in zip(axes.flat, images, strict=False):
+        for stage, colour in [("before", "0.6"), ("after", "tab:blue")]:
+            t = tiles[(tiles.image == name) & (tiles.stage == stage)]
+            ax.scatter(t.dx_m, t.dy_m, s=8, c=colour, label=f"{stage} (n={len(t)})")
+        ax.axhline(0, c="k", lw=0.5)
+        ax.axvline(0, c="k", lw=0.5)
+        ax.set(xlim=(-LIM_M, LIM_M), ylim=(-LIM_M, LIM_M), aspect="equal")
+        ax.set_title(name.replace("_20cm_local_coregistration", "")[:34], fontsize=8)
         ax.tick_params(labelsize=7)
+        ax.legend(fontsize=6, loc="lower left")
+    for ax in axes.flat[len(images) :]:
+        ax.set_axis_off()
+    fig.supxlabel("residual shift east [m]")
+    fig.supylabel("residual shift north [m]")
     fig.tight_layout()
     fig.savefig(OUT_FIG, dpi=110)
     print(f"wrote {OUT_TABLE}, {OUT_TILES}, {OUT_FIG}")

@@ -8,8 +8,8 @@ on their own terms instead: median phase-correlation shift over ~100 m tiles
 (master_thesis.image_alignment) against the reference ortho, applied to the
 raw common-grid ortho. DSMs keep their DSM-based registration.
 
-- Orthos with < MIN_TILES usable tiles (no overlap: 20250606, 20250717) keep
-  the DSM-based shift already written by coregister_to_reference.py.
+- Orthos with < MIN_TILES usable tiles keep the DSM-based shift already
+  written by coregister_to_reference.py.
 - Thermal IR doesn't correlate with RGB; it gets the shift of the 3T RGB ortho
   from the same flight.
 - The historical DOP20s (no DSM) are handled the same way, written as new

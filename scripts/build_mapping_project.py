@@ -32,7 +32,8 @@ GROUPS = [
     ("Kartierung", [
         ("Dolinen-Polygone (zu digitalisieren)",
          f"{ROOT / 'data/manual/sinkhole_polygons.gpkg'}|layername=sinkholes", True),
-        ("Feldpunkte Aug 2026", str(ROOT / "fieldwork/field_data/fieldwork_annotations.gpkg"), True),
+        ("Feldpunkte Aug 2026",
+         str(ROOT / "fieldwork/field_data/fieldwork_annotations.gpkg"), True),
         ("Dolinenpunkte (Sinkholes.shp)", str(ROOT / "data/manual/Sinkholes.shp"), True),
         ("Verdachtsflaechen", str(ROOT / "data/manual/Suspicious_Areas.shp"), False),
     ]),
@@ -44,7 +45,8 @@ GROUPS = [
     ]),
     ("Drohnen-Orthos", [
         ("Aug 2025 RGB (Referenz)", CO / "20250820_terra_ppk_rgb_om.tif", True),
-        ("Aug 2026 RGB (3M)", CO / "20260827_terra_rtk_rgb_om_20cm_local_coregistration.tif", False),
+        ("Aug 2026 RGB (3M)",
+         CO / "20260827_terra_rtk_rgb_om_20cm_local_coregistration.tif", False),
         ("Aug 2026 Thermal (3T)",
          CO / "20260827_terra_rtk_thermal_ir_om_20cm_local_coregistration.tif", False),
         ("Jun 2025 RGB (Schnee!)", CO / "20250604_terra_ppk_rgb_om.tif", False),

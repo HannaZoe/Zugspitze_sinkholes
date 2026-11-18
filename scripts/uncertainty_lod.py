@@ -37,8 +37,8 @@ import pandas as pd
 import rasterio
 import xdem
 from affine import Affine
-from rasterio.enums import Resampling
 
+from master_thesis.dh_uncertainty import error_model, load_avg
 from master_thesis.paths import FIELD_DATA, FIGURES, INTERIM, MANUAL, PROCESSED
 from master_thesis.stable_ground import (
     erode_valid,
@@ -66,13 +66,7 @@ DIAMETERS_M = (10, 30)
 
 def load(name: str) -> tuple[np.ndarray, Affine]:
     """Read a raster from the 20 cm grid, averaged to 1 m."""
-    with rasterio.open(IN_DIR / f"{name}.tif") as src:
-        shape = (src.count, src.height // FACTOR, src.width // FACTOR)
-        arr = src.read(out_shape=shape, resampling=Resampling.average).astype("float32")
-        if src.nodata is not None and not np.isnan(src.nodata):
-            arr[arr == src.nodata] = np.nan
-        tf = src.transform * Affine.scale(src.width / shape[2], src.height / shape[1])
-    return arr, tf
+    return load_avg(IN_DIR / f"{name}.tif", FACTOR)
 
 
 def stable_mask(dems: dict, snow: dict, tf: Affine) -> np.ndarray:
@@ -86,23 +80,6 @@ def stable_mask(dems: dict, snow: dict, tf: Affine) -> np.ndarray:
         transform=tf, shape=shape, crs=CRS,
     )  # fmt: skip
     return ~features & ~np.logical_or.reduce(list(snow.values()))
-
-
-def analyse_pair(dh, dem_mean, stable, tf):
-    slope, maxc = xdem.terrain.get_terrain_attribute(
-        dem_mean, attribute=["slope", "max_curvature"], resolution=RES
-    )
-    # passed as a raster: xdem 0.2.3 takes the pixel size only from a raster here
-    dh_r = xdem.DEM.from_array(dh, tf, CRS, nodata=-9999.0)
-    sigma, binning, _ = xdem.spatialstats.infer_heteroscedasticity_from_stable(
-        dh_r, [slope, maxc], stable_mask=stable, list_var_names=["slope", "maxc"]
-    )
-    sigma = sigma.get_nanarray() if hasattr(sigma, "get_nanarray") else sigma
-    emp, params, _ = xdem.spatialstats.infer_spatial_correlation_from_stable(
-        dh, ["Gaussian", "Spherical"], stable_mask=stable, errors=sigma, gsd=RES,
-        subsample=2000, n_variograms=5, random_state=42,
-    )  # fmt: skip
-    return sigma, slope, binning, emp, params
 
 
 def main() -> None:
@@ -126,8 +103,8 @@ def main() -> None:
         dh = dems[late] - dems[early]
         valid = erode_valid(np.isfinite(dh), RES)
         stable = inliers_of(dh, base & valid, k=4.0)
-        sigma, slope, binning, emp, params = analyse_pair(
-            dh, np.nanmean([dems[late], dems[early]], axis=0), stable, tf
+        sigma, slope, binning, emp, params = error_model(
+            dh, np.nanmean([dems[late], dems[early]], axis=0), stable, tf, CRS, RES
         )
         lod95 = np.where(valid, 1.96 * sigma, np.nan).astype("float32")
         with rasterio.open(OUT_DIR / f"lod95_{pair}.tif", "w", **profile) as dst:

@@ -6,13 +6,18 @@ Two sources, both under Master_Thesis/fieldwork/field_data/raw/ (gitignored):
   (layer notes_attachments -> notes_point), so the photo gets the location of
   its note.
 - Phone photos (phone_photos/*.jpg): located by the GPS position in their
-  EXIF header. Photos without GPS are listed and skipped.
+  EXIF header. The Aug 2026 ones have empty (NaN) GPS tags, so they fall back
+  to time matching: the photo gets the position of the field point or QField
+  note logged closest in time (phone clock = QField clock to a few seconds,
+  checked on the QField photos). `dt_min` says how far apart that was; photos
+  more than MAX_DT_MIN from any fix are skipped.
 
 Output: fieldwork/field_data/field_photos.gpkg (EPSG:32632), one point per
 photo with `photo` = path relative to Master_Thesis/qgis/projects/, so the
 QGIS project can show the image (attachment widget / map tip).
 """
 
+import math
 import os
 
 import geopandas as gpd
@@ -26,6 +31,9 @@ CRS = "EPSG:32632"
 RAW = FIELD_DATA / "raw"
 NOTES = RAW / "sinkholes" / "notes.gpkg"
 PHONE = RAW / "phone_photos"
+ANNOTATIONS = FIELD_DATA / "fieldwork_annotations.gpkg"
+TZ = "Europe/Berlin"  # camera EXIF time is local
+MAX_DT_MIN = 15
 PROJECT_DIR = FIELD_DATA.parents[1] / "qgis" / "projects"
 OUT = FIELD_DATA / "field_photos.gpkg"
 GPS_IFD = 0x8825
@@ -46,6 +54,8 @@ def qfield_photos() -> gpd.GeoDataFrame:
         "source": "QField note",
         "taken": df.timestamp_x.astype(str),
         "label": (df.title.fillna("") + " " + df.note.fillna("")).str.strip(),
+        "located": "QField note",
+        "dt_min": 0.0,
     }, geometry=df.geometry.values, crs=points.crs).to_crs(CRS)  # fmt: skip
 
 
@@ -54,23 +64,45 @@ def _deg(dms, ref) -> float:
     return (d + m / 60 + s / 3600) * (-1 if ref in ("S", "W") else 1)
 
 
+def fixes() -> gpd.GeoDataFrame:
+    """Every timestamped position logged in the field (field points + notes), UTC."""
+    parts = [gpd.read_file(ANNOTATIONS), gpd.read_file(NOTES, layer="notes_point")]
+    g = pd.concat([p.to_crs(CRS)[["timestamp", "geometry"]] for p in parts], ignore_index=True)
+    g["timestamp"] = pd.to_datetime(g.timestamp, utc=True)
+    return gpd.GeoDataFrame(g, crs=CRS).sort_values("timestamp").reset_index(drop=True)
+
+
 def phone_photos() -> gpd.GeoDataFrame:
-    rows, missing = [], []
+    rows, skipped = [], []
+    track = fixes()
     for f in sorted(PHONE.glob("*.jp*g")) if PHONE.exists() else []:
         exif = Image.open(f).getexif()
+        taken = str(exif.get(306, ""))
+        row = {"photo": rel(f), "source": "phone", "taken": taken, "label": f.stem}
         gps = {ExifTags.GPSTAGS.get(k, k): v for k, v in exif.get_ifd(GPS_IFD).items()}
-        if "GPSLatitude" not in gps:
-            missing.append(f.name)
+        try:
+            lat = _deg(gps["GPSLatitude"], gps.get("GPSLatitudeRef", "N"))
+            lon = _deg(gps["GPSLongitude"], gps.get("GPSLongitudeRef", "E"))
+        except (KeyError, ValueError, TypeError):
+            lat = lon = math.nan
+        if not math.isnan(lat):
+            pt = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326").to_crs(CRS).iloc[0]
+            rows.append(row | {"located": "EXIF GPS", "dt_min": 0.0, "geometry": pt})
             continue
-        lat = _deg(gps["GPSLatitude"], gps.get("GPSLatitudeRef", "N"))
-        lon = _deg(gps["GPSLongitude"], gps.get("GPSLongitudeRef", "E"))
-        rows.append({"photo": rel(f), "source": "phone", "taken": str(exif.get(306, "")),
-                     "label": f.stem, "geometry": Point(lon, lat)})  # fmt: skip
-    if missing:
-        print(f"  {len(missing)} phone photos without GPS, skipped: {', '.join(missing[:10])}")
-    if not rows:
-        return gpd.GeoDataFrame(columns=["photo", "source", "taken", "label", "geometry"], crs=CRS)
-    return gpd.GeoDataFrame(rows, crs="EPSG:4326").to_crs(CRS)
+        t = pd.Timestamp(taken.replace(":", "-", 2)).tz_localize(TZ).tz_convert("UTC")
+        dt = (track.timestamp - t).abs()
+        i = dt.idxmin()
+        gap = dt.min()
+        if gap > pd.Timedelta(minutes=MAX_DT_MIN):
+            skipped.append(f.name)
+            continue
+        rows.append(row | {"located": "time match", "dt_min": round(gap.total_seconds() / 60, 1),
+                           "geometry": track.geometry[i]})  # fmt: skip
+    if skipped:
+        print(f"  {len(skipped)} phone photos with no GPS and no fix within {MAX_DT_MIN} min: "
+              f"{', '.join(skipped[:10])}")  # fmt: skip
+    cols = ["photo", "source", "taken", "label", "located", "dt_min", "geometry"]
+    return gpd.GeoDataFrame(rows or None, columns=cols, crs=CRS)
 
 
 def main() -> None:

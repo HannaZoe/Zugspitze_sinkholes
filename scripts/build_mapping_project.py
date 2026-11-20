@@ -57,6 +57,10 @@ REVIEW = ROOT / "data" / "processed" / "mapping_review.gpkg"
 TYPES = ["sinkhole - funnel", "sinkhole - bowl", "sinkhole - elongated", "cave",
          "multi-sinkhole", "unclear"]  # fmt: skip
 # interpreted origin, after Gutierrez et al. (2008); no caprock on the plateau
+MULTI_EPOCH = {"snow": ["none", "partial", "filled"], "changed": ["no", "yes", "n.a."]}
+# one filtered, editable layer per epoch of the same polygon file
+EPOCH_LAYERS = {"Okt 2024": "2024-10-25", "Jun 2025": "2025-06-04",
+                "Aug 2025 (Referenz)": "2025-08-20", "Aug 2026": "2026-08-27"}  # fmt: skip
 GENESIS = ["solution", "cover collapse", "cover suffosion", "cover sagging",
            "bedrock collapse", "unclear"]  # fmt: skip
 # LfU Bayern digital geological map 1:25,000 (WMS, CC BY 4.0): "wms:<layer>" paths
@@ -76,6 +80,7 @@ OUTLINES = {
     "Umrisse aller Fluege": "120,120,120",
     "Dolinen-Polygone (zu digitalisieren)": "230,30,30",
     "Tiefe Senken ohne Punkt (> 1 m)": "255,0,255",
+    **{f"Polygone {label}": "230,30,30" for label in EPOCH_LAYERS},
 }
 # review points: name -> marker colour
 REVIEW_POINTS = {
@@ -97,6 +102,11 @@ GROUPS = [
         ("Umrisse aller Fluege", f"{FOOTPRINTS}|layername=footprints", False),
     ]),
     # review layers (make_mapping_review.py) are one-off: drag them in when needed
+    ("Polygone pro Epoche", [
+        (f"Polygone {label}", f"{POLYGONS}|layername=sinkholes|subset=\"epoch\" = '{ep}'",
+         ep == "2025-08-20")
+        for label, ep in EPOCH_LAYERS.items()
+    ]),
     ("Senken aus LiDAR-DSM (Hilfe)", [
         ("Senkenkonturen Aug 2025", f"{DEPR / 'depressions.gpkg'}|layername=20250820", True),
         ("Senkenkonturen Okt 2024", f"{DEPR / 'depressions.gpkg'}|layername=20241025", False),
@@ -218,7 +228,7 @@ def setup_type_dropdowns(project: QgsProject) -> None:
         src = layer.source().replace("\\", "/").lower()
         if layer.type() != 0 or not src.startswith(sources):
             continue
-        for field, values in (("type", TYPES), ("genesis", GENESIS)):
+        for field, values in (("type", TYPES), ("genesis", GENESIS), *MULTI_EPOCH.items()):
             idx = layer.fields().indexOf(field)
             if idx >= 0:
                 layer.setEditorWidgetSetup(idx, QgsEditorWidgetSetup(
@@ -285,7 +295,7 @@ def main() -> None:
             "Kartierung",
             "Schummerung (LiDAR)",
             "Senken aus LiDAR-DSM (Hilfe)",
-            "Zu pruefen (Inventar-Abgleich)",
+            "Polygone pro Epoche",
         ):
             group.setExpanded(False)
     setup_type_dropdowns(project)

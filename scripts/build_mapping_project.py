@@ -53,6 +53,7 @@ POINTS = ROOT / "data" / "manual" / "sinkhole_points.gpkg"
 POINT_LAYER = "Dolinen-Punkte (zu setzen)"
 DEPR = ROOT / "data" / "processed" / "depressions"
 REVIEW = ROOT / "data" / "processed" / "mapping_review.gpkg"
+GLACIAL = ROOT / "data" / "processed" / "glacial"
 # doline type classes (docs/mapping_protocol.md), dropdown in point + polygon layer
 TYPES = ["sinkhole - funnel", "sinkhole - bowl", "sinkhole - elongated", "cave",
          "multi-sinkhole", "unclear"]  # fmt: skip
@@ -113,6 +114,10 @@ GROUPS = [
         ("Senkenkonturen Jun 2025 (Schnee!)",
          f"{DEPR / 'depressions.gpkg'}|layername=20250604", False),
         ("Senkentiefe Aug 2025 [m]", DEPR / "20250820_depth.tif", False),
+    ]),
+    ("Glazialmorphologie (DGM1)", [
+        ("Lokales Relief DGM1 (Waelle rot, Senken blau)", GLACIAL / "lrm.tif", False),
+        ("Schummerung DGM1 multidirektional (gross)", GLACIAL / "hillshade_multi.tif", False),
     ]),
     ("Geologie dGK25 (LfU Bayern, CC BY 4.0)", [
         ("Stoerungen / Strukturlinien (dGK25)", "wms:strukturln_dgk25", True),
@@ -190,6 +195,20 @@ def setup_points(layer: QgsVectorLayer) -> None:
     label.setFormat(fmt)
     layer.setLabeling(QgsVectorLayerSimpleLabeling(label))
     layer.setLabelsEnabled(True)
+
+
+def setup_lrm(layer: QgsRasterLayer) -> None:
+    """Diverging blue-white-red, +-2 m, semi-transparent over a hillshade."""
+    ramp = QgsColorRampShader(-2, 2, None, QgsColorRampShader.Interpolated)
+    ramp.setColorRampItemList([
+        QgsColorRampShader.ColorRampItem(-2, QColor(33, 102, 172), "-2 m (Senke)"),
+        QgsColorRampShader.ColorRampItem(0, QColor(247, 247, 247), "0"),
+        QgsColorRampShader.ColorRampItem(2, QColor(178, 24, 43), "+2 m (Wall)"),
+    ])  # fmt: skip
+    shader = QgsRasterShader()
+    shader.setRasterShaderFunction(ramp)
+    layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader))
+    layer.renderer().setOpacity(0.6)
 
 
 def setup_depressions(layer) -> None:
@@ -287,6 +306,8 @@ def main() -> None:
                 setup_points(layer)
             if name.startswith("Senken"):
                 setup_depressions(layer)
+            if name.startswith("Lokales Relief"):
+                setup_lrm(layer)
             project.addMapLayer(layer, False)
             pos = min(l_idx, len(group.children()))
             group.insertLayer(pos, layer).setItemVisibilityChecked(visible)

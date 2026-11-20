@@ -82,6 +82,9 @@ OUTLINES = {
     "Dolinen-Polygone (zu digitalisieren)": "230,30,30",
     "Tiefe Senken ohne Punkt (> 1 m)": "255,0,255",
     **{f"Polygone {label}": "230,30,30" for label in EPOCH_LAYERS},
+    "Gletscher Kleine Eiszeit (max., Rekonstruktion)": "0,90,200",
+    "Gletscher 1892": "0,170,255",
+    "Gletscher 1949-2025": "150,210,255",
 }
 # review points: name -> marker colour
 REVIEW_POINTS = {
@@ -114,6 +117,14 @@ GROUPS = [
         ("Senkenkonturen Jun 2025 (Schnee!)",
          f"{DEPR / 'depressions.gpkg'}|layername=20250604", False),
         ("Senkentiefe Aug 2025 [m]", DEPR / "20250820_depth.tif", False),
+    ]),
+    ("Gletscherstaende", [
+        ("Gletscher Kleine Eiszeit (max., Rekonstruktion)",
+         f"{GLACIAL / 'glacier_outlines.gpkg'}|layername=outlines|subset=\"year\" = 1850", True),
+        ("Gletscher 1892", f"{GLACIAL / 'glacier_outlines.gpkg'}|layername=outlines"
+         "|subset=\"year\" = 1892", True),
+        ("Gletscher 1949-2025", f"{GLACIAL / 'glacier_outlines.gpkg'}|layername=outlines"
+         "|subset=\"year\" >= 1949", False),
     ]),
     ("Glazialmorphologie (DGM1)", [
         ("Lokales Relief DGM1 (Waelle rot, Senken blau)", GLACIAL / "lrm.tif", False),

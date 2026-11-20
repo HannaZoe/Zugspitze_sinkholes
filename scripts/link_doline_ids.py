@@ -13,7 +13,10 @@ Close QGIS first. Steps:
    point has no polygon of its own in the same epoch);
    polygons holding several points keep an empty id and are listed.
    Epoch spellings normalised, `year` set, `type` taken from the point,
-   `source` from the point (or DOP20 / Mavic 3M by epoch).
+   `notes` too where the polygon has none, `source` from the point (or
+   DOP20 / Mavic 3M by epoch).
+3. Both layers get a `genesis` text field (interpreted origin after Gutierrez
+   et al. 2008, filled by hand; dropdown set in build_mapping_project.py).
 Commit the gpkgs before running, so the previous state stays recoverable.
 """
 
@@ -36,13 +39,13 @@ EPOCH = {None: DEFAULT_EPOCH, "": DEFAULT_EPOCH, "08.2025": "2025-08-20",
 SOURCE_BY_EPOCH = {"2003-09-04": "DOP20", "2026-08-27": "UAV RGB (Mavic 3M)"}
 
 
-def ensure_int_field(layer, name: str) -> None:
+def ensure_field(layer, name: str, kind=ogr.OFTInteger) -> None:
     if layer.GetLayerDefn().GetFieldIndex(name) < 0:
-        layer.CreateField(ogr.FieldDefn(name, ogr.OFTInteger))
+        layer.CreateField(ogr.FieldDefn(name, kind))
 
 
 def renumber_points(layer) -> dict[int, tuple]:
-    ensure_int_field(layer, "year")
+    ensure_field(layer, "year")
     feats = sorted(layer, key=lambda f: (f.GetField("id") is None, f.GetField("id") or 0))
     points = {}
     for new_id, f in enumerate(feats, start=1):
@@ -51,15 +54,16 @@ def renumber_points(layer) -> dict[int, tuple]:
         f.SetField("source", f.GetField("source") or DEFAULT_SOURCE)
         f.SetField("year", int(f.GetField("epoch")[:4]))
         layer.SetFeature(f)
-        points[new_id] = (f.GetGeometryRef().Clone(), f.GetField("type"), f.GetField("source"))
+        points[new_id] = (f.GetGeometryRef().Clone(), f.GetField("type"), f.GetField("source"),
+                          f.GetField("notes"))  # fmt: skip
     return points
 
 
 def link_polygons(layer, points: dict[int, tuple]) -> None:
-    ensure_int_field(layer, "year")
+    ensure_field(layer, "year")
     feats = list(layer)
     epoch_of = {f.GetFID(): EPOCH.get(f.GetField("epoch"), f.GetField("epoch")) for f in feats}
-    inside = {f.GetFID(): [i for i, (p, _, _) in points.items()
+    inside = {f.GetFID(): [i for i, (p, *_) in points.items()
                            if f.GetGeometryRef().Contains(p)] for f in feats}  # fmt: skip
     taken = {(epoch_of[k], v[0]) for k, v in inside.items() if len(v) == 1}
     several, nearest, orphans = [], [], []
@@ -68,7 +72,7 @@ def link_polygons(layer, points: dict[int, tuple]) -> None:
         hits = inside[fid]
         pid = hits[0] if len(hits) == 1 else None
         if not hits:
-            dist, i = min((g.Distance(p), i) for i, (p, _, _) in points.items())
+            dist, i = min((g.Distance(p), i) for i, (p, *_) in points.items())
             if dist <= NEAREST_M and (epoch_of[fid], i) not in taken:
                 pid = i
                 nearest.append(i)
@@ -84,7 +88,9 @@ def link_polygons(layer, points: dict[int, tuple]) -> None:
             f.SetFieldNull("id")
         else:
             f.SetField("id", pid)
-            _, ptype, psource = points[pid]
+            _, ptype, psource, pnotes = points[pid]
+            if pnotes and not f.GetField("notes"):
+                f.SetField("notes", pnotes)
             if ptype:
                 f.SetField("type", ptype)
             elif f.GetField("type") not in TYPES:
@@ -100,6 +106,8 @@ def main() -> None:
     pds = ogr.Open(str(POINTS), 1)
     points = renumber_points(pds.GetLayer("sinkhole_points"))
     gds = ogr.Open(str(POLYGONS), 1)
+    for lyr in (pds.GetLayer("sinkhole_points"), gds.GetLayer("sinkholes")):
+        ensure_field(lyr, "genesis", ogr.OFTString)
     link_polygons(gds.GetLayer("sinkholes"), points)
     r = gds.ExecuteSQL("SELECT year, count(*), sum(id IS NULL) FROM sinkholes GROUP BY year")
     for x in r:

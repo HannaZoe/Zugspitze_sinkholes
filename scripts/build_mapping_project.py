@@ -56,6 +56,9 @@ REVIEW = ROOT / "data" / "processed" / "mapping_review.gpkg"
 # doline type classes (docs/mapping_protocol.md), dropdown in point + polygon layer
 TYPES = ["sinkhole - funnel", "sinkhole - bowl", "sinkhole - elongated", "cave",
          "multi-sinkhole", "unclear"]  # fmt: skip
+# interpreted origin, after Gutierrez et al. (2008); no caprock on the plateau
+GENESIS = ["solution", "cover collapse", "cover suffosion", "cover sagging",
+           "bedrock collapse", "unclear"]  # fmt: skip
 # LfU Bayern digital geological map 1:25,000 (WMS, CC BY 4.0): "wms:<layer>" paths
 DGK25 = "https://www.lfu.bayern.de/gdi/wms/geologie/dgk25?"
 WMS_OPACITY = {"geoleinheit_dgk25": 0.45, "dgk25_raster": 0.6}
@@ -215,12 +218,12 @@ def setup_type_dropdowns(project: QgsProject) -> None:
         src = layer.source().replace("\\", "/").lower()
         if layer.type() != 0 or not src.startswith(sources):
             continue
-        idx = layer.fields().indexOf("type")
-        if idx < 0:
-            continue
-        layer.setEditorWidgetSetup(idx, QgsEditorWidgetSetup(
-            "ValueMap", {"map": [{t: t} for t in TYPES]},
-        ))  # fmt: skip
+        for field, values in (("type", TYPES), ("genesis", GENESIS)):
+            idx = layer.fields().indexOf(field)
+            if idx >= 0:
+                layer.setEditorWidgetSetup(idx, QgsEditorWidgetSetup(
+                    "ValueMap", {"map": [{v: v} for v in values]},
+                ))  # fmt: skip
 
 
 def main() -> None:

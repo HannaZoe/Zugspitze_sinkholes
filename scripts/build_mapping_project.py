@@ -52,6 +52,7 @@ POLYGONS = ROOT / "data" / "manual" / "sinkhole_polygons.gpkg"
 POINTS = ROOT / "data" / "manual" / "sinkhole_points.gpkg"
 POINT_LAYER = "Dolinen-Punkte (zu setzen)"
 DEPR = ROOT / "data" / "processed" / "depressions"
+REVIEW = ROOT / "data" / "processed" / "mapping_review.gpkg"
 # LfU Bayern digital geological map 1:25,000 (WMS, CC BY 4.0): "wms:<layer>" paths
 DGK25 = "https://www.lfu.bayern.de/gdi/wms/geologie/dgk25?"
 WMS_OPACITY = {"geoleinheit_dgk25": 0.45, "dgk25_raster": 0.6}
@@ -68,6 +69,12 @@ OUTLINES = {
     "Umriss groesste Befliegung (Aug 2026 3M)": "0,0,0",
     "Umrisse aller Fluege": "120,120,120",
     "Dolinen-Polygone (zu digitalisieren)": "230,30,30",
+    "Tiefe Senken ohne Punkt (> 1 m)": "255,0,255",
+}
+# review points: name -> marker colour
+REVIEW_POINTS = {
+    "Punkte ohne Senke (> 5 m)": "255,140,0",
+    "Alte Punkte ohne Treffer (> 10 m)": "0,200,0",
 }
 
 # (group, [(layer name, path, visible)]), top of the legend first
@@ -82,6 +89,11 @@ GROUPS = [
         ("Verdachtsflaechen", str(ROOT / "data/manual/Suspicious_Areas.shp"), False),
         ("Umriss groesste Befliegung (Aug 2026 3M)", f"{FOOTPRINTS}|layername=largest", True),
         ("Umrisse aller Fluege", f"{FOOTPRINTS}|layername=footprints", False),
+    ]),
+    ("Zu pruefen (Inventar-Abgleich)", [
+        ("Tiefe Senken ohne Punkt (> 1 m)", f"{REVIEW}|layername=deep_unmarked", True),
+        ("Punkte ohne Senke (> 5 m)", f"{REVIEW}|layername=points_no_depression", True),
+        ("Alte Punkte ohne Treffer (> 10 m)", f"{REVIEW}|layername=older_unmatched", True),
     ]),
     ("Senken aus LiDAR-DSM (Hilfe)", [
         ("Senkenkonturen Aug 2025", f"{DEPR / 'depressions.gpkg'}|layername=20250820", True),
@@ -237,6 +249,11 @@ def main() -> None:
                 layer.renderer().setSymbol(QgsFillSymbol.createSimple({
                     "color": "0,0,0,0", "outline_color": OUTLINES[name], "outline_width": "0.6",
                 }))  # fmt: skip
+            if name in REVIEW_POINTS:
+                layer.renderer().setSymbol(QgsMarkerSymbol.createSimple({
+                    "name": "diamond", "color": "0,0,0,0", "outline_color": REVIEW_POINTS[name],
+                    "outline_width": "0.6", "size": "4",
+                }))  # fmt: skip
             if name == PHOTO_LAYER:
                 setup_photos(layer)
             if name == POINT_LAYER:
@@ -247,7 +264,12 @@ def main() -> None:
             pos = min(l_idx, len(group.children()))
             group.insertLayer(pos, layer).setItemVisibilityChecked(visible)
             print(f"  added {name}")
-        if group_name not in ("Kartierung", "Schummerung (LiDAR)", "Senken aus LiDAR-DSM (Hilfe)"):
+        if group_name not in (
+            "Kartierung",
+            "Schummerung (LiDAR)",
+            "Senken aus LiDAR-DSM (Hilfe)",
+            "Zu pruefen (Inventar-Abgleich)",
+        ):
             group.setExpanded(False)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     project.write(str(OUT))

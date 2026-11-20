@@ -12,6 +12,9 @@ Writes Master_Thesis/qgis/projects/kartierung.qgz (relative paths). If the
 project already exists it is only extended: layers whose name is not in it yet
 are added, everything else (styles, extent, own layers) stays as saved.
 The older Zugspitze.qgz is left alone.
+The doline point layer (same fields as the polygon layer, auto-numbered id)
+is created on first run if it doesn't exist yet. New groups and layers are
+inserted at their place in GROUPS, so vectors stay above the rasters.
 """
 
 import os
@@ -19,20 +22,38 @@ from pathlib import Path
 
 from qgis.core import (
     QgsApplication,
+    QgsCategorizedSymbolRenderer,
+    QgsColorRampShader,
     QgsCoordinateReferenceSystem,
+    QgsCoordinateTransformContext,
+    QgsDefaultValue,
     QgsEditorWidgetSetup,
     QgsFillSymbol,
     QgsMarkerSymbol,
+    QgsPalLayerSettings,
     QgsProject,
     QgsRasterLayer,
+    QgsRasterShader,
+    QgsRendererCategory,
+    QgsSingleBandPseudoColorRenderer,
+    QgsVectorFileWriter,
     QgsVectorLayer,
+    QgsVectorLayerSimpleLabeling,
+    QgsWkbTypes,
 )
+from qgis.PyQt.QtGui import QColor
 
 ROOT = Path(os.environ.get("THESIS_ROOT", Path(__file__).resolve().parents[2] / "Master_Thesis"))
 CO = ROOT / "data" / "interim" / "coregistered_20cm"
 OUT = ROOT / "qgis" / "projects" / "kartierung.qgz"
 FOOTPRINTS = ROOT / "data" / "processed" / "uav_footprints.gpkg"
 PHOTOS = ROOT / "fieldwork" / "field_data" / "field_photos.gpkg"
+POLYGONS = ROOT / "data" / "manual" / "sinkhole_polygons.gpkg"
+POINTS = ROOT / "data" / "manual" / "sinkhole_points.gpkg"
+POINT_LAYER = "Dolinen-Punkte (zu setzen)"
+DEPR = ROOT / "data" / "processed" / "depressions"
+# closed-depression outlines per depth level: level -> (colour, width)
+DEPR_STYLE = {0.1: ("0,220,255", "0.3"), 0.3: ("0,120,255", "0.5"), 1.0: ("0,0,160", "0.7")}
 PHOTO_LAYER = "Feldfotos (Maus drauf = Foto)"
 # hover tip: the photo itself; paths in the layer are relative to the project folder
 PHOTO_TIP = (
@@ -49,8 +70,8 @@ OUTLINES = {
 # (group, [(layer name, path, visible)]), top of the legend first
 GROUPS = [
     ("Kartierung", [
-        ("Dolinen-Polygone (zu digitalisieren)",
-         f"{ROOT / 'data/manual/sinkhole_polygons.gpkg'}|layername=sinkholes", True),
+        (POINT_LAYER, f"{POINTS}|layername=sinkhole_points", True),
+        ("Dolinen-Polygone (zu digitalisieren)", f"{POLYGONS}|layername=sinkholes", True),
         ("Feldpunkte Aug 2026",
          str(ROOT / "fieldwork/field_data/fieldwork_annotations.gpkg"), True),
         (PHOTO_LAYER, f"{PHOTOS}|layername=field_photos", True),
@@ -58,6 +79,13 @@ GROUPS = [
         ("Verdachtsflaechen", str(ROOT / "data/manual/Suspicious_Areas.shp"), False),
         ("Umriss groesste Befliegung (Aug 2026 3M)", f"{FOOTPRINTS}|layername=largest", True),
         ("Umrisse aller Fluege", f"{FOOTPRINTS}|layername=footprints", False),
+    ]),
+    ("Senken aus LiDAR-DSM (Hilfe)", [
+        ("Senkenkonturen Aug 2025", f"{DEPR / 'depressions.gpkg'}|layername=20250820", True),
+        ("Senkenkonturen Okt 2024", f"{DEPR / 'depressions.gpkg'}|layername=20241025", False),
+        ("Senkenkonturen Jun 2025 (Schnee!)",
+         f"{DEPR / 'depressions.gpkg'}|layername=20250604", False),
+        ("Senkentiefe Aug 2025 [m]", DEPR / "20250820_depth.tif", False),
     ]),
     ("Schummerung (LiDAR)", [
         ("Aug 2025 LiDAR", CO / "hillshade/20250820_terra_ppk_lidar_dsm_hillshade.tif", True),
@@ -100,17 +128,79 @@ def setup_photos(layer: QgsVectorLayer) -> None:
     layer.setMapTipsEnabled(True)
 
 
+def ensure_point_layer() -> None:
+    """Create the doline point layer with the polygon layer's fields, if missing."""
+    if POINTS.exists():
+        return
+    polys = QgsVectorLayer(f"{POLYGONS}|layername=sinkholes", "p", "ogr")
+    opts = QgsVectorFileWriter.SaveVectorOptions()
+    opts.driverName, opts.layerName = "GPKG", "sinkhole_points"
+    writer = QgsVectorFileWriter.create(
+        str(POINTS), polys.fields(), QgsWkbTypes.Point,
+        QgsCoordinateReferenceSystem("EPSG:32632"), QgsCoordinateTransformContext(), opts,
+    )  # fmt: skip
+    del writer  # flushes and closes the file
+    print(f"  created {POINTS}")
+
+
+def setup_points(layer: QgsVectorLayer) -> None:
+    """Red dots labelled with their id; id numbers itself (max + 1)."""
+    layer.renderer().setSymbol(QgsMarkerSymbol.createSimple({
+        "name": "circle", "color": "230,30,30", "outline_color": "255,255,255", "size": "2.4",
+    }))  # fmt: skip
+    idx = layer.fields().indexOf("id")
+    layer.setDefaultValueDefinition(idx, QgsDefaultValue('coalesce(maximum("id"), 0) + 1'))
+    label = QgsPalLayerSettings()
+    label.fieldName = "id"
+    fmt = label.format()
+    fmt.setColor(QColor("yellow"))
+    fmt.buffer().setEnabled(True)
+    label.setFormat(fmt)
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(label))
+    layer.setLabelsEnabled(True)
+
+
+def setup_depressions(layer) -> None:
+    if isinstance(layer, QgsRasterLayer):  # depth: transparent at 0, dark blue at 2 m
+        ramp = QgsColorRampShader(0, 2, None, QgsColorRampShader.Interpolated)
+        ramp.setColorRampItemList([
+            QgsColorRampShader.ColorRampItem(0.05, QColor(255, 255, 255, 0), "0"),
+            QgsColorRampShader.ColorRampItem(0.3, QColor(120, 190, 255, 160), "0.3"),
+            QgsColorRampShader.ColorRampItem(2.0, QColor(0, 0, 140, 220), "2 m"),
+        ])  # fmt: skip
+        shader = QgsRasterShader()
+        shader.setRasterShaderFunction(ramp)
+        layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader))
+        return
+    cats = [
+        QgsRendererCategory(
+            lvl,
+            QgsFillSymbol.createSimple(
+                {
+                    "color": "0,0,0,0",
+                    "outline_color": col,
+                    "outline_width": w,
+                }
+            ),
+            f"{lvl} m tief",
+        )  # fmt: skip
+        for lvl, (col, w) in DEPR_STYLE.items()
+    ]
+    layer.setRenderer(QgsCategorizedSymbolRenderer("level_m", cats))
+
+
 def main() -> None:
     project = QgsProject.instance()
     if OUT.exists():
         project.read(str(OUT))
     else:
         project.setCrs(QgsCoordinateReferenceSystem("EPSG:32632"))
+    ensure_point_layer()
     existing = {layer.name() for layer in project.mapLayers().values()}
     root = project.layerTreeRoot()
-    for group_name, layers in GROUPS:
-        group = root.findGroup(group_name) or root.addGroup(group_name)
-        for name, path, visible in layers:
+    for g_idx, (group_name, layers) in enumerate(GROUPS):
+        group = root.findGroup(group_name) or root.insertGroup(g_idx, group_name)
+        for l_idx, (name, path, visible) in enumerate(layers):
             if name in existing:
                 continue
             path = str(path)
@@ -125,10 +215,15 @@ def main() -> None:
                 }))  # fmt: skip
             if name == PHOTO_LAYER:
                 setup_photos(layer)
+            if name == POINT_LAYER:
+                setup_points(layer)
+            if name.startswith("Senken"):
+                setup_depressions(layer)
             project.addMapLayer(layer, False)
-            group.addLayer(layer).setItemVisibilityChecked(visible)
+            pos = min(l_idx, len(group.children()))
+            group.insertLayer(pos, layer).setItemVisibilityChecked(visible)
             print(f"  added {name}")
-        if group_name not in ("Kartierung", "Schummerung (LiDAR)"):
+        if group_name not in ("Kartierung", "Schummerung (LiDAR)", "Senken aus LiDAR-DSM (Hilfe)"):
             group.setExpanded(False)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     project.write(str(OUT))

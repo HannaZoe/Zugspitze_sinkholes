@@ -52,6 +52,9 @@ POLYGONS = ROOT / "data" / "manual" / "sinkhole_polygons.gpkg"
 POINTS = ROOT / "data" / "manual" / "sinkhole_points.gpkg"
 POINT_LAYER = "Dolinen-Punkte (zu setzen)"
 DEPR = ROOT / "data" / "processed" / "depressions"
+# LfU Bayern digital geological map 1:25,000 (WMS, CC BY 4.0): "wms:<layer>" paths
+DGK25 = "https://www.lfu.bayern.de/gdi/wms/geologie/dgk25?"
+WMS_OPACITY = {"geoleinheit_dgk25": 0.45, "dgk25_raster": 0.6}
 # closed-depression outlines per depth level: level -> (colour, width)
 DEPR_STYLE = {0.1: ("0,220,255", "0.3"), 0.3: ("0,120,255", "0.5"), 1.0: ("0,0,160", "0.7")}
 PHOTO_LAYER = "Feldfotos (Maus drauf = Foto)"
@@ -86,6 +89,11 @@ GROUPS = [
         ("Senkenkonturen Jun 2025 (Schnee!)",
          f"{DEPR / 'depressions.gpkg'}|layername=20250604", False),
         ("Senkentiefe Aug 2025 [m]", DEPR / "20250820_depth.tif", False),
+    ]),
+    ("Geologie dGK25 (LfU Bayern, CC BY 4.0)", [
+        ("Stoerungen / Strukturlinien (dGK25)", "wms:strukturln_dgk25", True),
+        ("Geologische Einheiten (dGK25)", "wms:geoleinheit_dgk25", False),
+        ("GK25 gescannt mit Kuerzeln", "wms:dgk25_raster", False),
     ]),
     ("Schummerung (LiDAR)", [
         ("Aug 2025 LiDAR", CO / "hillshade/20250820_terra_ppk_lidar_dsm_hillshade.tif", True),
@@ -196,16 +204,32 @@ def main() -> None:
     else:
         project.setCrs(QgsCoordinateReferenceSystem("EPSG:32632"))
     ensure_point_layer()
-    existing = {layer.name() for layer in project.mapLayers().values()}
+
+    # skip layers already in the project by name *or* source (Hanna renames layers)
+    def norm(src: str) -> str:
+        return src.replace("\\", "/").lower()
+
+    layers_now = project.mapLayers().values()
+    existing = {layer.name() for layer in layers_now} | {norm(lyr.source()) for lyr in layers_now}
     root = project.layerTreeRoot()
     for g_idx, (group_name, layers) in enumerate(GROUPS):
         group = root.findGroup(group_name) or root.insertGroup(g_idx, group_name)
         for l_idx, (name, path, visible) in enumerate(layers):
-            if name in existing:
-                continue
             path = str(path)
+            if name in existing or norm(path) in existing:
+                continue
             vector = path.endswith((".gpkg", ".shp")) or "|layername=" in path
-            layer = QgsVectorLayer(path, name, "ogr") if vector else QgsRasterLayer(path, name)
+            if path.startswith("wms:"):
+                wms = path[4:]
+                uri = (f"crs=EPSG:25832&dpiMode=7&format=image/png&layers={wms}"
+                       f"&styles=&url={DGK25}")  # fmt: skip
+                layer = QgsRasterLayer(uri, name, "wms")
+                if layer.isValid():
+                    layer.renderer().setOpacity(WMS_OPACITY.get(wms, 1.0))
+            elif vector:
+                layer = QgsVectorLayer(path, name, "ogr")
+            else:
+                layer = QgsRasterLayer(path, name)
             if not layer.isValid():
                 print(f"  skipped (not found / invalid): {name} -> {path}")
                 continue

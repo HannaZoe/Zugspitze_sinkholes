@@ -53,6 +53,9 @@ POINTS = ROOT / "data" / "manual" / "sinkhole_points.gpkg"
 POINT_LAYER = "Dolinen-Punkte (zu setzen)"
 DEPR = ROOT / "data" / "processed" / "depressions"
 REVIEW = ROOT / "data" / "processed" / "mapping_review.gpkg"
+# doline type classes (docs/mapping_protocol.md), dropdown in point + polygon layer
+TYPES = ["sinkhole - funnel", "sinkhole - bowl", "sinkhole - elongated", "cave",
+         "multi-sinkhole", "unclear"]  # fmt: skip
 # LfU Bayern digital geological map 1:25,000 (WMS, CC BY 4.0): "wms:<layer>" paths
 DGK25 = "https://www.lfu.bayern.de/gdi/wms/geologie/dgk25?"
 WMS_OPACITY = {"geoleinheit_dgk25": 0.45, "dgk25_raster": 0.6}
@@ -90,11 +93,7 @@ GROUPS = [
         ("Umriss groesste Befliegung (Aug 2026 3M)", f"{FOOTPRINTS}|layername=largest", True),
         ("Umrisse aller Fluege", f"{FOOTPRINTS}|layername=footprints", False),
     ]),
-    ("Zu pruefen (Inventar-Abgleich)", [
-        ("Tiefe Senken ohne Punkt (> 1 m)", f"{REVIEW}|layername=deep_unmarked", True),
-        ("Punkte ohne Senke (> 5 m)", f"{REVIEW}|layername=points_no_depression", True),
-        ("Alte Punkte ohne Treffer (> 10 m)", f"{REVIEW}|layername=older_unmatched", True),
-    ]),
+    # review layers (make_mapping_review.py) are one-off: drag them in when needed
     ("Senken aus LiDAR-DSM (Hilfe)", [
         ("Senkenkonturen Aug 2025", f"{DEPR / 'depressions.gpkg'}|layername=20250820", True),
         ("Senkenkonturen Okt 2024", f"{DEPR / 'depressions.gpkg'}|layername=20241025", False),
@@ -209,6 +208,21 @@ def setup_depressions(layer) -> None:
     layer.setRenderer(QgsCategorizedSymbolRenderer("level_m", cats))
 
 
+def setup_type_dropdowns(project: QgsProject) -> None:
+    """Value-map dropdown for `type` on every layer backed by the point/polygon files."""
+    sources = (str(POINTS).replace("\\", "/").lower(), str(POLYGONS).replace("\\", "/").lower())
+    for layer in project.mapLayers().values():
+        src = layer.source().replace("\\", "/").lower()
+        if layer.type() != 0 or not src.startswith(sources):
+            continue
+        idx = layer.fields().indexOf("type")
+        if idx < 0:
+            continue
+        layer.setEditorWidgetSetup(idx, QgsEditorWidgetSetup(
+            "ValueMap", {"map": [{t: t} for t in TYPES]},
+        ))  # fmt: skip
+
+
 def main() -> None:
     project = QgsProject.instance()
     if OUT.exists():
@@ -271,6 +285,7 @@ def main() -> None:
             "Zu pruefen (Inventar-Abgleich)",
         ):
             group.setExpanded(False)
+    setup_type_dropdowns(project)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     project.write(str(OUT))
     print(f"wrote {OUT}")

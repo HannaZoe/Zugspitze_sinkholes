@@ -13,7 +13,9 @@ project already exists it is only extended: layers whose name is not in it yet
 are added, everything else (styles, extent, own layers) stays as saved.
 The older Zugspitze.qgz is left alone.
 The doline point layer (same fields as the polygon layer, auto-numbered id)
-is created on first run if it doesn't exist yet. New groups and layers are
+and the opening layer (small polygons of the visible dark opening/core of a
+doline, mappable in every epoch incl. DOP20 and 2026, see mapping protocol)
+are created on first run if they don't exist yet. New groups and layers are
 inserted at their place in GROUPS, so vectors stay above the rasters.
 """
 
@@ -21,6 +23,7 @@ import os
 from pathlib import Path
 
 from qgis.core import (
+    Qgis,
     QgsApplication,
     QgsCategorizedSymbolRenderer,
     QgsColorRampShader,
@@ -28,6 +31,8 @@ from qgis.core import (
     QgsCoordinateTransformContext,
     QgsDefaultValue,
     QgsEditorWidgetSetup,
+    QgsField,
+    QgsFields,
     QgsFillSymbol,
     QgsMarkerSymbol,
     QgsPalLayerSettings,
@@ -41,6 +46,7 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
     QgsWkbTypes,
 )
+from qgis.PyQt.QtCore import QMetaType
 from qgis.PyQt.QtGui import QColor
 
 ROOT = Path(os.environ.get("THESIS_ROOT", Path(__file__).resolve().parents[2] / "Master_Thesis"))
@@ -51,17 +57,22 @@ PHOTOS = ROOT / "fieldwork" / "field_data" / "field_photos.gpkg"
 POLYGONS = ROOT / "data" / "manual" / "sinkhole_polygons.gpkg"
 POINTS = ROOT / "data" / "manual" / "sinkhole_points.gpkg"
 POINT_LAYER = "Dolinen-Punkte (zu setzen)"
+OPENINGS = ROOT / "data" / "manual" / "sinkhole_openings.gpkg"
+OPENING_LAYER = "Oeffnungen (alle Epochen)"
+UAV_EPOCHS = ["2024-10-25", "2025-06-04", "2025-08-20", "2026-08-27"]
+DOP_EPOCHS = ["2003-09-04", "2006-07-02", "2009-09-01", "2012-07-27", "2015-07-01",
+              "2018-09-11", "2020-07-08", "2022-06-12", "2024-07-30"]  # fmt: skip
 DEPR = ROOT / "data" / "processed" / "depressions"
 REVIEW = ROOT / "data" / "processed" / "mapping_review.gpkg"
 GLACIAL = ROOT / "data" / "processed" / "glacial"
 # doline type classes (docs/mapping_protocol.md), dropdown in point + polygon layer
 TYPES = ["sinkhole - funnel", "sinkhole - bowl", "sinkhole - elongated", "cave",
          "multi-sinkhole", "unclear"]  # fmt: skip
-# interpreted origin, after Gutierrez et al. (2008); no caprock on the plateau
 MULTI_EPOCH = {"snow": ["none", "partial", "filled"], "changed": ["no", "yes", "n.a."]}
 # one filtered, editable layer per epoch of the same polygon file
 EPOCH_LAYERS = {"Okt 2024": "2024-10-25", "Jun 2025": "2025-06-04",
                 "Aug 2025 (Referenz)": "2025-08-20", "Aug 2026": "2026-08-27"}  # fmt: skip
+# interpreted origin, after Gutierrez et al. (2008); no caprock on the plateau
 GENESIS = ["solution", "cover collapse", "cover suffosion", "cover sagging",
            "bedrock collapse", "unclear"]  # fmt: skip
 # LfU Bayern digital geological map 1:25,000 (WMS, CC BY 4.0): "wms:<layer>" paths
@@ -97,6 +108,7 @@ GROUPS = [
     ("Kartierung", [
         (POINT_LAYER, f"{POINTS}|layername=sinkhole_points", True),
         ("Dolinen-Polygone (zu digitalisieren)", f"{POLYGONS}|layername=sinkholes", True),
+        (OPENING_LAYER, f"{OPENINGS}|layername=openings", True),
         ("Feldpunkte Aug 2026",
          str(ROOT / "fieldwork/field_data/fieldwork_annotations.gpkg"), True),
         (PHOTO_LAYER, f"{PHOTOS}|layername=field_photos", True),
@@ -117,6 +129,15 @@ GROUPS = [
         ("Senkenkonturen Jun 2025 (Schnee!)",
          f"{DEPR / 'depressions.gpkg'}|layername=20250604", False),
         ("Senkentiefe Aug 2025 [m]", DEPR / "20250820_depth.tif", False),
+    ]),
+    ("Form ohne Lichtrichtung (LiDAR)", [
+        *[(f"Schummerung multidirektional {lab}",
+           CO / f"hillshade/{ep}_terra_ppk_lidar_dsm_hillshade_multi.tif", False)
+          for lab, ep in [("Aug 2025", "20250820"), ("Jun 2025", "20250604"),
+                          ("Okt 2024", "20241025")]],
+        *[(f"Neigung {lab} [Grad]", CO / f"hillshade/{ep}_terra_ppk_lidar_dsm_slope.tif", False)
+          for lab, ep in [("Aug 2025", "20250820"), ("Jun 2025", "20250604"),
+                          ("Okt 2024", "20241025")]],
     ]),
     ("Gletscherstaende", [
         ("Gletscher Kleine Eiszeit (max., Rekonstruktion)",
@@ -189,6 +210,72 @@ def ensure_point_layer() -> None:
     )  # fmt: skip
     del writer  # flushes and closes the file
     print(f"  created {POINTS}")
+
+
+def ensure_openings_layer() -> None:
+    """Small polygons of visible openings, one per doline and epoch (all epochs)."""
+    if OPENINGS.exists():
+        return
+    fields = QgsFields()
+    for name, kind in [("id", QMetaType.Type.Int), ("epoch", QMetaType.Type.QString),
+                       ("year", QMetaType.Type.Int), ("source", QMetaType.Type.QString),
+                       ("notes", QMetaType.Type.QString)]:  # fmt: skip
+        fields.append(QgsField(name, kind))
+    opts = QgsVectorFileWriter.SaveVectorOptions()
+    opts.driverName, opts.layerName = "GPKG", "openings"
+    writer = QgsVectorFileWriter.create(
+        str(OPENINGS), fields, QgsWkbTypes.Polygon,
+        QgsCoordinateReferenceSystem("EPSG:32632"), QgsCoordinateTransformContext(), opts,
+    )  # fmt: skip
+    del writer
+    print(f"  created {OPENINGS}")
+
+
+def setup_openings(layer: QgsVectorLayer) -> None:
+    """Dark fill, yellow edge; epoch dropdown remembers the last value; id, year and
+    source fill themselves (nearest doline point within 20 m, year from epoch)."""
+    layer.renderer().setSymbol(QgsFillSymbol.createSimple({
+        "color": "0,0,0,90", "outline_color": "255,220,0", "outline_width": "0.5",
+    }))  # fmt: skip
+    f = layer.fields().indexOf
+    epochs = UAV_EPOCHS + DOP_EPOCHS
+    layer.setEditorWidgetSetup(f("epoch"), QgsEditorWidgetSetup(
+        "ValueMap", {"map": [{e: e} for e in epochs]}))  # fmt: skip
+    cfg = layer.editFormConfig()
+    try:
+        cfg.setReuseLastValuePolicy(
+            f("epoch"), Qgis.AttributeFormReuseLastValuePolicy.AllowedDefaultOn
+        )
+    except AttributeError:  # older QGIS
+        cfg.setReuseLastValue(f("epoch"), True)
+    layer.setEditFormConfig(cfg)
+    layer.setDefaultValueDefinition(
+        f("id"),
+        QgsDefaultValue(
+            "array_first(overlay_nearest('Dolinen-Punkte', \"id\", limit:=1, max_distance:=20))"
+        ),
+    )
+    layer.setDefaultValueDefinition(f("year"), QgsDefaultValue('to_int(left("epoch", 4))', True))
+    uav = ", ".join(f"'{e}'" for e in UAV_EPOCHS)
+    layer.setDefaultValueDefinition(
+        f("source"), QgsDefaultValue(f"if(\"epoch\" IN ({uav}), 'UAV RGB', 'DOP20')", True)
+    )
+
+
+def setup_slope(layer: QgsRasterLayer) -> None:
+    """Flat white, the break around 25-35 deg yellow-orange, walls dark red."""
+    ramp = QgsColorRampShader(0, 90, None, QgsColorRampShader.Interpolated)
+    ramp.setColorRampItemList([
+        QgsColorRampShader.ColorRampItem(10, QColor(255, 255, 255, 0), "< 10"),
+        QgsColorRampShader.ColorRampItem(25, QColor(255, 237, 160), "25"),
+        QgsColorRampShader.ColorRampItem(35, QColor(253, 141, 60), "35"),
+        QgsColorRampShader.ColorRampItem(50, QColor(189, 0, 38), "50"),
+        QgsColorRampShader.ColorRampItem(90, QColor(80, 0, 20), "90"),
+    ])  # fmt: skip
+    shader = QgsRasterShader()
+    shader.setRasterShaderFunction(ramp)
+    layer.setRenderer(QgsSingleBandPseudoColorRenderer(layer.dataProvider(), 1, shader))
+    layer.renderer().setOpacity(0.7)
 
 
 def setup_points(layer: QgsVectorLayer) -> None:
@@ -273,6 +360,7 @@ def main() -> None:
     else:
         project.setCrs(QgsCoordinateReferenceSystem("EPSG:32632"))
     ensure_point_layer()
+    ensure_openings_layer()
 
     # skip layers already in the project by name *or* source (Hanna renames layers)
     def norm(src: str) -> str:
@@ -313,6 +401,10 @@ def main() -> None:
                 }))  # fmt: skip
             if name == PHOTO_LAYER:
                 setup_photos(layer)
+            if name == OPENING_LAYER:
+                setup_openings(layer)
+            if name.startswith("Neigung"):
+                setup_slope(layer)
             if name == POINT_LAYER:
                 setup_points(layer)
             if name.startswith("Senken"):

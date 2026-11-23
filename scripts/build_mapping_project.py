@@ -65,6 +65,18 @@ DOP_EPOCHS = ["2003-09-04", "2006-07-02", "2009-09-01", "2012-07-27", "2015-07-0
 DEPR = ROOT / "data" / "processed" / "depressions"
 REVIEW = ROOT / "data" / "processed" / "mapping_review.gpkg"
 GLACIAL = ROOT / "data" / "processed" / "glacial"
+DGK_VEC = ROOT / "data" / "raw" / "dgk25" / "dgk25_vector.gpkg"
+UNITS_LAYER = "Gesteinseinheiten dGK25 (vektorisiert)"
+FAULTS_LAYER = "Stoerungen dGK25 (vektorisiert)"
+# unit -> fill colour (bedrock warm, Quaternary cover cool)
+UNIT_COLOURS = {
+    "Wettersteinkalk": "215,120,100",
+    "Moräne (Till), holozän": "120,170,230",
+    "Lokalmoräne (Till), würmzeitlich": "150,120,210",
+    "Hangschutt, pleistozän bis holozän": "120,200,150",
+    "Hangschutt, blockreich, pleistozän bis holozän": "90,160,110",
+    "Murablagerung, pleistozän bis holozän": "230,200,90",
+}
 # doline type classes (docs/mapping_protocol.md), dropdown in point + polygon layer
 TYPES = ["sinkhole - funnel", "sinkhole - bowl", "sinkhole - elongated", "cave",
          "multi-sinkhole", "unclear"]  # fmt: skip
@@ -152,6 +164,8 @@ GROUPS = [
         ("Schummerung DGM1 multidirektional (gross)", GLACIAL / "hillshade_multi.tif", False),
     ]),
     ("Geologie dGK25 (LfU Bayern, CC BY 4.0)", [
+        (FAULTS_LAYER, f"{DGK_VEC}|layername=faults", True),
+        (UNITS_LAYER, f"{DGK_VEC}|layername=units", False),
         ("Stoerungen / Strukturlinien (dGK25)", "wms:strukturln_dgk25", True),
         ("Geologische Einheiten (dGK25)", "wms:geoleinheit_dgk25", False),
         ("GK25 gescannt mit Kuerzeln", "wms:dgk25_raster", False),
@@ -295,6 +309,39 @@ def setup_points(layer: QgsVectorLayer) -> None:
     layer.setLabelsEnabled(True)
 
 
+def setup_units(layer: QgsVectorLayer) -> None:
+    """Semi-transparent fills by unit, labelled with the dGK25 short code."""
+    cats = [
+        QgsRendererCategory(
+            unit,
+            QgsFillSymbol.createSimple(
+                {
+                    "color": col + ",90",
+                    "outline_color": col,
+                    "outline_width": "0.4",
+                }
+            ),
+            unit,
+        )  # fmt: skip
+        for unit, col in UNIT_COLOURS.items()
+    ]
+    layer.setRenderer(QgsCategorizedSymbolRenderer("unit", cats))
+
+
+def setup_faults(layer: QgsVectorLayer) -> None:
+    """Proven faults solid, inferred dashed."""
+    from qgis.core import QgsLineSymbol
+
+    cats = [
+        QgsRendererCategory(kind, QgsLineSymbol.createSimple({
+            "line_color": "40,20,20", "line_width": "0.7", "line_style": style,
+        }), label)  # fmt: skip
+        for kind, style, label in [("fault, proven", "solid", "Fault, proven"),
+                                   ("fault, inferred", "dash", "Fault, inferred")]
+    ]  # fmt: skip
+    layer.setRenderer(QgsCategorizedSymbolRenderer("type", cats))
+
+
 def setup_lrm(layer: QgsRasterLayer) -> None:
     """Diverging blue-white-red, +-2 m, semi-transparent over a hillshade."""
     ramp = QgsColorRampShader(-2, 2, None, QgsColorRampShader.Interpolated)
@@ -409,6 +456,10 @@ def main() -> None:
                 setup_points(layer)
             if name.startswith("Senken"):
                 setup_depressions(layer)
+            if name == UNITS_LAYER:
+                setup_units(layer)
+            if name == FAULTS_LAYER:
+                setup_faults(layer)
             if name.startswith("Lokales Relief"):
                 setup_lrm(layer)
             project.addMapLayer(layer, False)

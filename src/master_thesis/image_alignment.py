@@ -36,12 +36,14 @@ def tile_shifts(
     min_valid: float = 0.9,
     min_cv: float = 0.05,
     max_shift_m: float = 10.0,
+    upsample: int = 10,
 ) -> pd.DataFrame:
     """Per-tile shift of `tgt_src` onto `ref_src` (same grid) in metres.
 
     Tiles need `min_valid` overlap and some texture (grey std/mean >= `min_cv`,
     which skips snow fields and deep shadow); shifts above `max_shift_m` are
-    treated as mismatches and dropped.
+    treated as mismatches and dropped. `upsample` sets the sub-pixel precision
+    (10 = 1/10 pixel).
     """
     res = ref_src.res[0]
     rows = []
@@ -57,7 +59,7 @@ def tile_shifts(
             if min(x[ok].std() / max(abs(x[ok].mean()), 1e-6) for x in (a, b)) < min_cv:
                 continue
             a, b = (np.where(ok, x - np.nanmean(x), 0) for x in (a, b))
-            (sr, sc), error, _ = phase_cross_correlation(a, b, upsample_factor=10)
+            (sr, sc), error, _ = phase_cross_correlation(a, b, upsample_factor=upsample)
             dx, dy = sc * res, -sr * res  # rows grow southwards
             if np.hypot(dx, dy) > max_shift_m:
                 continue
